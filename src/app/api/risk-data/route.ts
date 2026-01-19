@@ -1,6 +1,8 @@
 /**
  * API Route: Fetch fresh BTC risk data from Binance
  * GET /api/risk-data
+ *
+ * Fetches ALL historical data from Binance (2017+) and calculates risk
  */
 
 import { NextResponse } from 'next/server';
@@ -43,37 +45,60 @@ const HALVING_DATES = [
 ];
 
 /**
- * Fetch recent BTC data from Binance (last 400 days for calculations)
+ * Fetch ALL BTC data from Binance (from 2017-08-17 onwards)
+ * Paginates through the API to get complete history
  */
-async function fetchBinanceData(days: number = 400): Promise<PriceData[]> {
+async function fetchAllBinanceData(): Promise<PriceData[]> {
+  const allData: PriceData[] = [];
   const symbol = 'BTCUSDT';
   const interval = '1d';
+  const limit = 1000;
+
+  // Start from BTCUSDT listing date
+  let startTime = new Date('2017-08-17').getTime();
   const endTime = Date.now();
-  const startTime = endTime - days * 24 * 60 * 60 * 1000;
 
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=1000`;
+  while (startTime < endTime) {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&limit=${limit}`;
 
-  const response = await fetch(url, {
-    headers: { 'Accept': 'application/json' },
-    next: { revalidate: 3600 }, // Cache for 1 hour
-  });
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+    });
 
-  if (!response.ok) {
-    throw new Error(`Binance API error: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Binance API error: ${response.status}`);
+    }
+
+    const klines: BinanceKline[] = await response.json();
+
+    if (klines.length === 0) break;
+
+    for (const kline of klines) {
+      const [openTime, open, high, low, close, volume] = kline;
+      allData.push({
+        date: new Date(openTime).toISOString().split('T')[0],
+        open: parseFloat(open),
+        high: parseFloat(high),
+        low: parseFloat(low),
+        close: parseFloat(close),
+        volume: parseFloat(volume),
+      });
+    }
+
+    // Move to next batch
+    const lastKline = klines[klines.length - 1];
+    startTime = lastKline[6] + 1; // closeTime + 1ms
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
 
-  const klines: BinanceKline[] = await response.json();
-
-  return klines.map(kline => {
-    const [openTime, open, high, low, close, volume] = kline;
-    return {
-      date: new Date(openTime).toISOString().split('T')[0],
-      open: parseFloat(open),
-      high: parseFloat(high),
-      low: parseFloat(low),
-      close: parseFloat(close),
-      volume: parseFloat(volume),
-    };
+  // Remove duplicates
+  const seen = new Set<string>();
+  return allData.filter(d => {
+    if (seen.has(d.date)) return false;
+    seen.add(d.date);
+    return true;
   });
 }
 
@@ -81,7 +106,7 @@ async function fetchBinanceData(days: number = 400): Promise<PriceData[]> {
  * Calculate SMA
  */
 function calculateSMA(prices: number[], period: number): number {
-  if (prices.length < period) return prices[prices.length - 1];
+  if (prices.length < period) return prices[prices.length - 1] || 0;
   const slice = prices.slice(-period);
   return slice.reduce((a, b) => a + b, 0) / period;
 }
@@ -117,8 +142,12 @@ function calculateVolatility(prices: number[], period: number = 30): number {
 
   const returns: number[] = [];
   for (let i = prices.length - period; i < prices.length; i++) {
-    returns.push(Math.log(prices[i] / prices[i - 1]));
+    if (prices[i - 1] > 0) {
+      returns.push(Math.log(prices[i] / prices[i - 1]));
+    }
   }
+
+  if (returns.length === 0) return 0.5;
 
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
@@ -138,7 +167,7 @@ function getCycleInfo(date: Date): { daysSinceHalving: number; phase: string; pr
   const cycleLength = 1400; // ~4 years adjusted
   const progress = Math.min(daysSince / cycleLength, 1);
 
-  let phase = 'early';
+  let phase: 'early' | 'mid' | 'late' = 'early';
   if (progress > 0.6) phase = 'late';
   else if (progress > 0.3) phase = 'mid';
 
@@ -166,7 +195,7 @@ function calculateRisk(
 
   // Valuation: Price relative to 200 SMA
   const sma200 = calculateSMA(priceHistory, Math.min(200, priceHistory.length));
-  const mayerMultiple = price / sma200;
+  const mayerMultiple = sma200 > 0 ? price / sma200 : 1;
   const valuationScore = Math.min(Math.max((mayerMultiple - 0.5) / 2, 0), 1);
 
   // Momentum: RSI-based
@@ -181,10 +210,10 @@ function calculateRisk(
   const cycleInfo = getCycleInfo(date);
   const cycleScore = cycleInfo.progress;
 
-  // Macro (placeholder - would need external data)
+  // Macro (placeholder)
   const macroScore = 0.5;
 
-  // Attention (using volume as proxy)
+  // Attention (placeholder)
   const attentionScore = 0.5;
 
   const components = {
@@ -227,6 +256,7 @@ function calculateRisk(
  * Apply EMA smoothing
  */
 function smoothRisks(risks: number[], alpha: number = 0.3): number[] {
+  if (risks.length === 0) return [];
   const smoothed: number[] = [risks[0]];
   for (let i = 1; i < risks.length; i++) {
     smoothed.push(alpha * risks[i] + (1 - alpha) * smoothed[i - 1]);
@@ -236,8 +266,8 @@ function smoothRisks(risks: number[], alpha: number = 0.3): number[] {
 
 export async function GET() {
   try {
-    // Fetch data from Binance
-    const priceData = await fetchBinanceData(400);
+    // Fetch ALL data from Binance (2017+)
+    const priceData = await fetchAllBinanceData();
 
     if (priceData.length === 0) {
       return NextResponse.json({ error: 'No data available' }, { status: 500 });
@@ -245,8 +275,8 @@ export async function GET() {
 
     const prices = priceData.map(d => d.close);
 
-    // Calculate risk for each data point (skip first 50 for enough history)
-    const startIdx = Math.min(50, Math.floor(priceData.length * 0.1));
+    // Calculate risk for each data point (skip first 200 for enough history)
+    const startIdx = Math.min(200, Math.floor(priceData.length * 0.1));
     const riskData: RiskDataPoint[] = [];
     const rawRisks: number[] = [];
 
@@ -260,7 +290,7 @@ export async function GET() {
         date: priceData[i].date,
         price: priceData[i].close,
         risk,
-        smoothedRisk: risk, // Will be updated after smoothing
+        smoothedRisk: risk,
         components,
         cyclePhase: cycleInfo.phase,
         isHalving: isHalvingDate(date),
@@ -273,14 +303,15 @@ export async function GET() {
       riskData[i].smoothedRisk = smoothedRisks[i];
     }
 
-    // Return last 365 days for UI
-    const last365 = riskData.slice(-365);
-
     return NextResponse.json({
-      data: last365,
+      data: riskData,
       lastUpdated: new Date().toISOString(),
       source: 'binance',
       totalDays: priceData.length,
+      dataRange: {
+        start: priceData[0]?.date,
+        end: priceData[priceData.length - 1]?.date,
+      },
     });
   } catch (error) {
     console.error('Error fetching risk data:', error);
