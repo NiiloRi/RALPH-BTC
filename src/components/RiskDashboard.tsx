@@ -113,6 +113,8 @@ export default function RiskDashboard() {
   const [data, setData] = useState<UIDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<string>('');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [showSmoothed, setShowSmoothed] = useState(true);
   const [showComponents, setShowComponents] = useState(false);
@@ -125,18 +127,37 @@ export default function RiskDashboard() {
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
 
-  // Load data
+  // Load data - fetch fresh from Binance API on every page load
   useEffect(() => {
     async function loadData() {
+      setLoading(true);
+      setError(null);
+
       try {
-        // Try JSON first
+        // First, try to fetch fresh data from API (Binance)
+        const apiResponse = await fetch('/api/risk-data', {
+          cache: 'no-store', // Always fetch fresh data
+        });
+
+        if (apiResponse.ok) {
+          const apiData = await apiResponse.json();
+          setData(apiData.data);
+          setLastUpdated(apiData.lastUpdated);
+          setDataSource(`Live from ${apiData.source}`);
+          setLoading(false);
+          return;
+        }
+      } catch (apiError) {
+        console.warn('API fetch failed, falling back to static data:', apiError);
+      }
+
+      // Fallback to static files
+      try {
         let response = await fetch('/risk_data.json');
 
         if (!response.ok) {
-          // Fall back to CSV
           response = await fetch('/btc_risk_complete.csv');
           if (!response.ok) {
-            // Try original CSV
             response = await fetch('/btc_risk_binance.csv');
           }
         }
@@ -144,10 +165,9 @@ export default function RiskDashboard() {
         const text = await response.text();
 
         if (text.startsWith('[')) {
-          // JSON format
           setData(JSON.parse(text));
+          setDataSource('Static JSON');
         } else {
-          // CSV format
           const lines = text.trim().split('\n');
           const header = lines[0].split(',');
           const dateIdx = header.indexOf('date');
@@ -175,6 +195,7 @@ export default function RiskDashboard() {
           });
 
           setData(parsed);
+          setDataSource('Static CSV');
         }
 
         setLoading(false);
@@ -348,6 +369,16 @@ export default function RiskDashboard() {
           <span className="text-gray-400">Phase: </span>
           <span className="text-white capitalize">{latestData.cyclePhase}</span>
         </div>
+        {dataSource && (
+          <div className="bg-green-900/30 rounded-lg px-4 py-2 ml-auto">
+            <span className="text-green-400 font-medium">{dataSource}</span>
+            {lastUpdated && (
+              <span className="text-gray-400 ml-2 text-xs">
+                {new Date(lastUpdated).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
