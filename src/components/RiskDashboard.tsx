@@ -34,9 +34,46 @@ interface UIDataPoint {
 
 type TimeRange = 'all' | '1y' | '2y' | '3y' | '5y' | 'ytd';
 
+interface RiskFilter {
+  min: number;
+  max: number;
+  enabled: boolean;
+}
+
 interface TooltipProps {
   active?: boolean;
   payload?: Array<{ payload: UIDataPoint }>;
+}
+
+/**
+ * Get color from dark blue (low risk) to bright red (high risk)
+ */
+function getRiskHeatColor(risk: number): string {
+  // Clamp risk between 0 and 1
+  const r = Math.max(0, Math.min(1, risk));
+
+  // Color stops: dark blue -> cyan -> green -> yellow -> orange -> red
+  if (r < 0.2) {
+    // Dark blue to cyan (0-20%)
+    const t = r / 0.2;
+    return `rgb(${Math.round(30 + t * 0)}, ${Math.round(60 + t * 140)}, ${Math.round(180 + t * 75)})`;
+  } else if (r < 0.4) {
+    // Cyan to green (20-40%)
+    const t = (r - 0.2) / 0.2;
+    return `rgb(${Math.round(30 + t * 70)}, ${Math.round(200 - t * 20)}, ${Math.round(255 - t * 175)})`;
+  } else if (r < 0.6) {
+    // Green to yellow (40-60%)
+    const t = (r - 0.4) / 0.2;
+    return `rgb(${Math.round(100 + t * 155)}, ${Math.round(180 + t * 20)}, ${Math.round(80 - t * 60)})`;
+  } else if (r < 0.8) {
+    // Yellow to orange (60-80%)
+    const t = (r - 0.6) / 0.2;
+    return `rgb(${Math.round(255)}, ${Math.round(200 - t * 100)}, ${Math.round(20)})`;
+  } else {
+    // Orange to bright red (80-100%)
+    const t = (r - 0.8) / 0.2;
+    return `rgb(${Math.round(255 - t * 35)}, ${Math.round(100 - t * 70)}, ${Math.round(20 + t * 10)})`;
+  }
 }
 
 function CustomTooltip({ active, payload }: TooltipProps) {
@@ -120,6 +157,12 @@ export default function RiskDashboard() {
   const [showComponents, setShowComponents] = useState(false);
   const [showHalvings, setShowHalvings] = useState(true);
   const [logScale, setLogScale] = useState(true);
+  const [showHeatColors, setShowHeatColors] = useState(false);
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>({
+    min: 0,
+    max: 100,
+    enabled: false,
+  });
 
   // Zoom state
   const [zoomStart, setZoomStart] = useState<number | null>(null);
@@ -208,43 +251,56 @@ export default function RiskDashboard() {
     loadData();
   }, []);
 
-  // Filter data by time range
+  // Filter data by time range and risk level
   const filteredData = useMemo(() => {
     if (data.length === 0) return [];
 
-    // Custom zoom takes precedence
+    let result = data;
+
+    // Custom zoom takes precedence for time filtering
     if (zoomStart !== null && zoomEnd !== null) {
-      return data.filter(d => {
+      result = result.filter(d => {
         const ts = new Date(d.date).getTime();
         return ts >= zoomStart && ts <= zoomEnd;
       });
+    } else if (timeRange !== 'all') {
+      const now = new Date();
+      let startDate: Date;
+
+      switch (timeRange) {
+        case '1y':
+          startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+          break;
+        case '2y':
+          startDate = new Date(now.getFullYear() - 2, now.getMonth(), now.getDate());
+          break;
+        case '3y':
+          startDate = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
+          break;
+        case '5y':
+          startDate = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
+          break;
+        case 'ytd':
+          startDate = new Date(now.getFullYear(), 0, 1);
+          break;
+        default:
+          startDate = new Date(0);
+      }
+      result = result.filter(d => new Date(d.date) >= startDate);
     }
 
-    const now = new Date();
-    let startDate: Date;
-
-    switch (timeRange) {
-      case '1y':
-        startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
-        break;
-      case '2y':
-        startDate = new Date(now.getFullYear() - 2, now.getMonth(), now.getDate());
-        break;
-      case '3y':
-        startDate = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
-        break;
-      case '5y':
-        startDate = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
-        break;
-      case 'ytd':
-        startDate = new Date(now.getFullYear(), 0, 1);
-        break;
-      default:
-        return data;
+    // Apply risk level filter
+    if (riskFilter.enabled) {
+      const minRisk = riskFilter.min / 100;
+      const maxRisk = riskFilter.max / 100;
+      result = result.filter(d => {
+        const riskValue = showSmoothed ? d.smoothedRisk : d.risk;
+        return riskValue >= minRisk && riskValue <= maxRisk;
+      });
     }
 
-    return data.filter(d => new Date(d.date) >= startDate);
-  }, [data, timeRange, zoomStart, zoomEnd]);
+    return result;
+  }, [data, timeRange, zoomStart, zoomEnd, riskFilter, showSmoothed]);
 
   // Zoom handlers
   const handleMouseDown = (e: { activeLabel?: string | number }) => {
@@ -289,6 +345,16 @@ export default function RiskDashboard() {
     if (price >= 1000) return `$${(price / 1000).toFixed(0)}k`;
     return `$${price.toFixed(0)}`;
   };
+
+  // Add heat colors to data when enabled
+  const chartData = useMemo(() => {
+    if (!showHeatColors) return filteredData;
+
+    return filteredData.map(d => ({
+      ...d,
+      heatColor: getRiskHeatColor(showSmoothed ? d.smoothedRisk : d.risk),
+    }));
+  }, [filteredData, showHeatColors, showSmoothed]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -442,6 +508,15 @@ export default function RiskDashboard() {
             />
             <span className="text-sm text-gray-400">Components</span>
           </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showHeatColors}
+              onChange={e => setShowHeatColors(e.target.checked)}
+              className="rounded bg-gray-700 border-gray-600"
+            />
+            <span className="text-sm text-gray-400">Heat Map</span>
+          </label>
         </div>
 
         {zoomStart !== null && (
@@ -454,12 +529,98 @@ export default function RiskDashboard() {
         )}
       </div>
 
+      {/* Risk Filter */}
+      <div className="flex flex-wrap items-center gap-4 bg-gray-800/50 rounded-lg p-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={riskFilter.enabled}
+            onChange={e => setRiskFilter(prev => ({ ...prev, enabled: e.target.checked }))}
+            className="rounded bg-gray-700 border-gray-600"
+          />
+          <span className="text-sm text-gray-400">Filter by Risk Level</span>
+        </label>
+
+        <div className={`flex items-center gap-4 ${!riskFilter.enabled ? 'opacity-50' : ''}`}>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">Min:</span>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={riskFilter.min}
+              onChange={e => setRiskFilter(prev => ({
+                ...prev,
+                min: Math.max(0, Math.min(100, parseInt(e.target.value) || 0))
+              }))}
+              disabled={!riskFilter.enabled}
+              className="w-16 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
+            />
+            <span className="text-sm text-gray-500">%</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">Max:</span>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={riskFilter.max}
+              onChange={e => setRiskFilter(prev => ({
+                ...prev,
+                max: Math.max(0, Math.min(100, parseInt(e.target.value) || 100))
+              }))}
+              disabled={!riskFilter.enabled}
+              className="w-16 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
+            />
+            <span className="text-sm text-gray-500">%</span>
+          </div>
+
+          {/* Quick presets */}
+          <div className="flex items-center gap-1 ml-2">
+            <button
+              onClick={() => setRiskFilter({ min: 0, max: 30, enabled: true })}
+              disabled={!riskFilter.enabled}
+              className="rounded px-2 py-1 text-xs bg-green-800/50 text-green-400 hover:bg-green-800 disabled:opacity-50"
+            >
+              Low
+            </button>
+            <button
+              onClick={() => setRiskFilter({ min: 30, max: 60, enabled: true })}
+              disabled={!riskFilter.enabled}
+              className="rounded px-2 py-1 text-xs bg-yellow-800/50 text-yellow-400 hover:bg-yellow-800 disabled:opacity-50"
+            >
+              Mid
+            </button>
+            <button
+              onClick={() => setRiskFilter({ min: 60, max: 100, enabled: true })}
+              disabled={!riskFilter.enabled}
+              className="rounded px-2 py-1 text-xs bg-red-800/50 text-red-400 hover:bg-red-800 disabled:opacity-50"
+            >
+              High
+            </button>
+            <button
+              onClick={() => setRiskFilter({ min: 0, max: 100, enabled: false })}
+              className="rounded px-2 py-1 text-xs bg-gray-700 text-gray-400 hover:bg-gray-600 ml-2"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {riskFilter.enabled && (
+          <span className="text-sm text-gray-400 ml-auto">
+            Showing {filteredData.length} days in {riskFilter.min}-{riskFilter.max}% range
+          </span>
+        )}
+      </div>
+
       {/* Main Chart */}
       <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
         <div className="h-[500px]">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
-              data={filteredData}
+              data={chartData}
               margin={{ top: 20, right: 60, left: 20, bottom: 20 }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
@@ -480,7 +641,7 @@ export default function RiskDashboard() {
                 stroke="#6b7280"
                 tick={{ fill: '#9ca3af', fontSize: 11 }}
                 tickLine={{ stroke: '#4b5563' }}
-                interval={Math.max(0, Math.floor(filteredData.length / 10) - 1)}
+                interval={Math.max(0, Math.floor(chartData.length / 10) - 1)}
               />
 
               {/* Price axis (left) */}
@@ -501,9 +662,9 @@ export default function RiskDashboard() {
                 orientation="right"
                 domain={[0, 1]}
                 tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
-                stroke="#dc2626"
-                tick={{ fill: '#dc2626', fontSize: 11 }}
-                tickLine={{ stroke: '#dc2626' }}
+                stroke={showHeatColors ? '#6b7280' : '#dc2626'}
+                tick={{ fill: showHeatColors ? '#9ca3af' : '#dc2626', fontSize: 11 }}
+                tickLine={{ stroke: showHeatColors ? '#4b5563' : '#dc2626' }}
               />
 
               <Tooltip content={<CustomTooltip />} />
@@ -536,25 +697,41 @@ export default function RiskDashboard() {
                 isAnimationActive={false}
               />
 
-              {/* Risk area */}
-              <Area
-                yAxisId="risk"
-                type="monotone"
-                dataKey={showSmoothed ? 'smoothedRisk' : 'risk'}
-                stroke="none"
-                fill="url(#riskGradient)"
-                fillOpacity={0.4}
-                isAnimationActive={false}
-              />
+              {/* Risk area - hidden when heat map enabled */}
+              {!showHeatColors && (
+                <Area
+                  yAxisId="risk"
+                  type="monotone"
+                  dataKey={showSmoothed ? 'smoothedRisk' : 'risk'}
+                  stroke="none"
+                  fill="url(#riskGradient)"
+                  fillOpacity={0.4}
+                  isAnimationActive={false}
+                />
+              )}
 
-              {/* Risk line */}
+              {/* Risk line - normal red or heat colored dots */}
               <Line
                 yAxisId="risk"
                 type="monotone"
                 dataKey={showSmoothed ? 'smoothedRisk' : 'risk'}
-                stroke="#dc2626"
+                stroke={showHeatColors ? 'transparent' : '#dc2626'}
                 strokeWidth={1.5}
-                dot={false}
+                dot={showHeatColors ? (props) => {
+                  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint };
+                  if (cx === undefined || cy === undefined || !payload) return null;
+                  const risk = showSmoothed ? payload.smoothedRisk : payload.risk;
+                  return (
+                    <circle
+                      key={`dot-${cx}-${cy}`}
+                      cx={cx}
+                      cy={cy}
+                      r={3}
+                      fill={getRiskHeatColor(risk)}
+                      stroke="none"
+                    />
+                  );
+                } : false}
                 isAnimationActive={false}
               />
 
@@ -583,8 +760,9 @@ export default function RiskDashboard() {
         </div>
 
         <div className="mt-2 text-xs text-gray-500 text-center">
-          Drag on chart to zoom • {filteredData.length} days •{' '}
-          {filteredData[0]?.date} - {filteredData[filteredData.length - 1]?.date}
+          Drag on chart to zoom • {chartData.length} days •{' '}
+          {chartData[0]?.date} - {chartData[chartData.length - 1]?.date}
+          {showHeatColors && ' • Heat Map: Blue (low risk) → Red (high risk)'}
         </div>
       </div>
 

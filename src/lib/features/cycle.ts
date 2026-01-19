@@ -154,6 +154,88 @@ export const HISTORICAL_PEAKS: Date[] = [
 ];
 
 /**
+ * Historical cycle data for cycle-relative calculations
+ * Each cycle's low is from the bear market bottom BEFORE the halving
+ * Each cycle's high is the bull market peak AFTER the halving
+ */
+export interface CycleData {
+  halvingDate: string;
+  low: number;      // Bear market low (USD)
+  lowDate: string;  // Date of low
+  high: number;     // Bull market high (USD)
+  highDate: string; // Date of high
+}
+
+export const HISTORICAL_CYCLES: CycleData[] = [
+  {
+    halvingDate: '2012-11-28',
+    low: 2,
+    lowDate: '2011-11-18',
+    high: 1150,
+    highDate: '2013-12-04',
+  },
+  {
+    halvingDate: '2016-07-09',
+    low: 200,
+    lowDate: '2015-01-14',
+    high: 19800,
+    highDate: '2017-12-17',
+  },
+  {
+    halvingDate: '2020-05-11',
+    low: 3200,
+    lowDate: '2018-12-15',
+    high: 69000,
+    highDate: '2021-11-10',
+  },
+  {
+    halvingDate: '2024-04-20',
+    low: 15500,
+    lowDate: '2022-11-21',
+    high: 73800,      // Current cycle high (will update)
+    highDate: '2024-03-14',
+  },
+];
+
+/**
+ * Get previous cycle's low and high for cycle-relative calculations
+ * Returns the COMPLETED previous cycle's data as reference
+ */
+export function getPreviousCycleRange(date: Date): { low: number; high: number } {
+  const halvingIdx = getHalvingIndex(date);
+
+  // For cycle 0 or 1, use first cycle data
+  if (halvingIdx <= 0) {
+    return { low: HISTORICAL_CYCLES[0].low, high: HISTORICAL_CYCLES[0].high };
+  }
+
+  // Use the previous completed cycle
+  const prevCycleIdx = Math.min(halvingIdx - 1, HISTORICAL_CYCLES.length - 2);
+  const prevCycle = HISTORICAL_CYCLES[prevCycleIdx];
+
+  return { low: prevCycle.low, high: prevCycle.high };
+}
+
+/**
+ * Calculate cycle-relative price position
+ * Returns 0-1+ where:
+ * 0 = at previous cycle's low
+ * 1 = at previous cycle's high
+ * >1 = above previous cycle's high (new territory)
+ */
+export function getCycleRelativePrice(price: number, date: Date): number {
+  const { low, high } = getPreviousCycleRange(date);
+
+  if (high <= low) return 0.5;
+
+  // Calculate position relative to previous cycle's range
+  const position = (price - low) / (high - low);
+
+  // Clamp between 0 and some reasonable max (e.g., 2x previous high)
+  return Math.max(0, Math.min(2, position));
+}
+
+/**
  * Calculate comprehensive cycle score [0, 1]
  * Higher = later in cycle = potentially higher risk
  */

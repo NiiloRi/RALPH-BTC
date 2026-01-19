@@ -91,6 +91,35 @@ export function calculateMayerMultiple(price: number, sma200: number): number {
 }
 
 /**
+ * Cycle-relative valuation: where is current price relative to previous cycle's range
+ * This provides context that absolute metrics miss at cycle bottoms
+ *
+ * @param price Current price
+ * @param prevCycleLow Previous cycle's lowest price
+ * @param prevCycleHigh Previous cycle's highest price
+ * @returns Score 0-1 where:
+ *   0 = at or below previous cycle low (extreme opportunity)
+ *   0.5 = midway between prev low and high
+ *   1 = at previous cycle high
+ *   >1 possible if in new price territory (clamped to 1 for risk)
+ */
+export function calculateCycleRelativeValuation(
+  price: number,
+  prevCycleLow: number,
+  prevCycleHigh: number
+): number {
+  if (prevCycleHigh <= prevCycleLow || prevCycleLow <= 0) {
+    return 0.5; // Default neutral if invalid data
+  }
+
+  const position = (price - prevCycleLow) / (prevCycleHigh - prevCycleLow);
+
+  // Clamp to [0, 1] for risk purposes
+  // Being above previous high = max risk from valuation perspective
+  return Math.max(0, Math.min(1, position));
+}
+
+/**
  * Calculate comprehensive valuation score [0, 1]
  * Higher = more overvalued = higher risk
  */

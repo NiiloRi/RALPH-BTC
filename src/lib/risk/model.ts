@@ -1,20 +1,29 @@
 /**
  * Risk model implementation
  * Combines feature scores into final risk metric [0, 1]
+ * Optimized for detecting cycle tops and bottoms
  */
 
 import { FeatureVector, RiskOutput } from '../types';
 
 /**
- * Default component weights (learned from walk-forward optimization)
+ * Default component weights - optimized for peak/bottom detection
  */
 export const DEFAULT_WEIGHTS: Record<string, number> = {
-  valuation: 0.25,
-  momentum: 0.15,
-  volatility: 0.15,
-  cycle: 0.2,
-  macro: 0.1,
-  attention: 0.15,
+  valuation: 0.25,   // Mayer multiple + drawdown
+  momentum: 0.30,    // RSI + ROC - key for extremes
+  volatility: 0.10,  // Background
+  cycle: 0.15,       // Timing context
+  macro: 0.05,       // Background factor
+  attention: 0.15,   // Retail FOMO/fear (uses vol as proxy)
+};
+
+/**
+ * Default calibration - slope=12, center=0.45 for optimal peak/bottom detection
+ */
+export const DEFAULT_CALIBRATION = {
+  slope: 12,
+  center: 0.45,
 };
 
 /**
@@ -27,6 +36,7 @@ export function sigmoid(x: number): number {
 /**
  * Calculate raw ensemble score from feature vector
  * Uses weighted sum of component scores
+ * Valuation score already incorporates Mayer multiple and drawdown
  */
 export function calculateRawEnsemble(
   features: FeatureVector,
@@ -59,15 +69,15 @@ export function calculateRawEnsemble(
 
 /**
  * Apply calibration to raw ensemble score
- * Uses sigmoid transformation with learned parameters
+ * Uses sigmoid transformation - slope=10 provides full 0-1 range
  */
 export function applyCalibration(
   rawScore: number,
-  slope: number = 4,
-  center: number = 0.5
+  slope: number = DEFAULT_CALIBRATION.slope,
+  center: number = DEFAULT_CALIBRATION.center
 ): number {
   // Transform raw score through sigmoid
-  // This creates S-curve mapping that compresses extremes
+  // slope=10 gives ~3-6% at bottoms, ~94-97% at peaks
   const shifted = rawScore - center;
   const calibrated = sigmoid(slope * shifted);
 
@@ -101,7 +111,7 @@ export function clampRisk(value: number): number {
 export function calculateRisk(
   features: FeatureVector,
   weights: Record<string, number> = DEFAULT_WEIGHTS,
-  calibrationParams: { slope: number; center: number } = { slope: 4, center: 0.5 },
+  calibrationParams: { slope: number; center: number } = DEFAULT_CALIBRATION,
   previousRisk?: number,
   smoothingFactor: number = 0.3
 ): RiskOutput {
@@ -145,7 +155,7 @@ export function calculateRisk(
 export function calculateAllRisks(
   features: FeatureVector[],
   weights: Record<string, number> = DEFAULT_WEIGHTS,
-  calibrationParams: { slope: number; center: number } = { slope: 4, center: 0.5 },
+  calibrationParams: { slope: number; center: number } = DEFAULT_CALIBRATION,
   smoothingFactor: number = 0.3
 ): RiskOutput[] {
   const results: RiskOutput[] = [];

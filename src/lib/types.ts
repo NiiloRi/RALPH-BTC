@@ -76,6 +76,10 @@ export interface FeatureVector {
   daysSinceHalving: number;
   cyclePhase: 'early' | 'mid' | 'late';
   estimatedCycleProgress: number;
+  // Cycle-relative features (based on previous cycle's range)
+  prevCycleLow: number;
+  prevCycleHigh: number;
+  cycleRelativePrice: number;  // 0 = at prev low, 1 = at prev high, >1 = new territory
   // Macro features (optional)
   macroScore: number;
   dxyZScore: number;

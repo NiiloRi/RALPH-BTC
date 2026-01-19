@@ -11,7 +11,7 @@ export * from './macro';
 export * from './attention';
 
 import { DailyData, FeatureVector } from '../types';
-import { calculateValuationScore, getValuationComponents } from './valuation';
+import { calculateValuationScore, getValuationComponents, calculateCycleRelativeValuation } from './valuation';
 import { calculateMomentumScore, getMomentumComponents } from './momentum';
 import { calculateVolatilityScore, getVolatilityComponents } from './volatility';
 import {
@@ -23,6 +23,8 @@ import {
   estimateCycleLength,
   getHalvingIndex,
   HISTORICAL_PEAKS,
+  getPreviousCycleRange,
+  getCycleRelativePrice,
 } from './cycle';
 import { calculateMacroScore, getMacroComponents } from './macro';
 import { calculateAttentionScore, getAttentionComponents } from './attention';
@@ -45,6 +47,10 @@ export function buildFeatureVector(
   const cycleLength = estimateCycleLength(halvingIdx, knownPeaks);
   const phase = getCyclePhase(daysHalving, cycleLength);
   const cycleProgress = daysHalving / cycleLength;
+
+  // Get previous cycle range for cycle-relative calculations
+  const prevCycleRange = getPreviousCycleRange(date);
+  const cycleRelativePrice = getCycleRelativePrice(current.price, date);
 
   // Calculate all scores
   const valuationScore = calculateValuationScore(data, index, daysGenesis);
@@ -78,6 +84,10 @@ export function buildFeatureVector(
     daysSinceHalving: daysHalving,
     cyclePhase: phase,
     estimatedCycleProgress: cycleProgress,
+    // Cycle-relative features
+    prevCycleLow: prevCycleRange.low,
+    prevCycleHigh: prevCycleRange.high,
+    cycleRelativePrice,
     macroScore,
     dxyZScore: getMacroComponents(data, index).dxyZScore,
     attentionScore,
