@@ -1,26 +1,42 @@
 {
-  "name": "btc-risk-metric",
-  "version": "0.1.0",
+  "name": "ralph-crypto",
+  "version": "1.0.0",
+  "description": "BTC Risk Metric with cycle-aware backtesting and Next.js dashboard",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "fetch:data": "tsx scripts/fetch-data.ts",
+    "build:features": "tsx scripts/build-features.ts",
+    "train:model": "tsx scripts/train-model.ts",
+    "backtest": "tsx scripts/run-backtest.ts",
+    "export:ui": "tsx scripts/export-for-ui.ts",
+    "pipeline": "npm run fetch:data && npm run build:features && npm run train:model && npm run backtest && npm run export:ui"
   },
   "dependencies": {
     "next": "16.1.1",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "recharts": "^3.6.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^3.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.7.0",
+    "typescript": "^5",
+    "vitest": "^3.0.0"
   }
 }
