@@ -128,16 +128,22 @@ describe('getMacroComponents', () => {
       realizedVol30d: 0.5,
       return90d: 0.1,
       dxy: 100 + (i % 10) * 0.1,
+      m2YoY: 0.05,
+      fedFunds: 5.0,
+      yieldSpread: 0.5,
+      realRate: 1.5,
     }));
     const components = getMacroComponents(data, 199);
 
-    expect(components).toHaveProperty('dxy');
-    expect(components).toHaveProperty('dxyZScore');
+    expect(components).toHaveProperty('m2Signal');
+    expect(components).toHaveProperty('fedFundsSignal');
+    expect(components).toHaveProperty('yieldCurveSignal');
+    expect(components).toHaveProperty('realRateSignal');
+    expect(components).toHaveProperty('dxySignal');
     expect(components).toHaveProperty('liquidityProxy');
-    expect(components).toHaveProperty('btcSentiment');
   });
 
-  it('handles missing DXY', () => {
+  it('handles missing macro data', () => {
     const data: DailyData[] = Array(200).fill(null).map((_, i) => ({
       date: `2024-01-${String(i + 1).padStart(2, '0')}`,
       price: 50000 + i * 50,
@@ -145,7 +151,9 @@ describe('getMacroComponents', () => {
     }));
     const components = getMacroComponents(data, 199);
 
-    expect(components.dxy).toBeUndefined();
-    expect(components.dxyZScore).toBe(0);
+    // When no macro data available, signals should be neutral (0.5)
+    expect(components.m2Signal).toBe(0.5);
+    expect(components.fedFundsSignal).toBe(0.5);
+    expect(components.dxySignal).toBe(0.5);
   });
 });

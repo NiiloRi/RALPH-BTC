@@ -43,6 +43,12 @@ export const DailyDataSchema = z.object({
   // Macro
   dxy: z.number().optional(),
   treasury10y: z.number().optional(),
+  treasury2y: z.number().optional(),
+  yieldSpread: z.number().optional(),    // 10Y - 2Y spread
+  realRate: z.number().optional(),       // 10Y TIPS yield
+  m2: z.number().optional(),             // M2 money supply (billions)
+  m2YoY: z.number().optional(),          // M2 year-over-year change (decimal, e.g., 0.05 = 5%)
+  fedFunds: z.number().optional(),       // Fed Funds effective rate (%)
   // Derivatives (optional - may not be available)
   fundingRate: z.number().optional(),
   openInterest: z.number().optional(),
@@ -83,6 +89,11 @@ export interface FeatureVector {
   // Macro features (optional)
   macroScore: number;
   dxyZScore: number;
+  m2Signal: number;
+  fedFundsSignal: number;
+  yieldCurveSignal: number;
+  realRateSignal: number;
+  dynamicMacroWeight: number;  // Dynamic weight based on macro regime volatility
   // Retail attention features (optional)
   attentionScore: number;
   // Raw price for reference
@@ -163,6 +174,27 @@ export interface UIDataPoint {
   };
   cyclePhase: 'early' | 'mid' | 'late';
   isHalving: boolean;
+}
+
+// Macro data bundle from FRED API
+export interface MacroDataBundle {
+  m2: Map<string, number>;           // M2 money supply by date
+  fedFunds: Map<string, number>;     // Fed Funds rate by date
+  treasury10y: Map<string, number>;  // 10Y Treasury by date
+  treasury2y: Map<string, number>;   // 2Y Treasury by date
+  yieldSpread: Map<string, number>;  // 10Y-2Y spread by date
+  realRate: Map<string, number>;     // 10Y TIPS by date
+  dxy: Map<string, number>;          // Dollar index by date
+}
+
+// Macro component breakdown for analysis
+export interface MacroComponents {
+  m2Signal: number;
+  fedFundsSignal: number;
+  yieldCurveSignal: number;
+  realRateSignal: number;
+  dxySignal: number;
+  liquidityProxy: number;
 }
 
 // Data cache metadata

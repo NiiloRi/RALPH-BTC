@@ -3,7 +3,7 @@
  * Handles missing data, gaps, and creates a consistent daily dataset
  */
 
-import { PriceData, DailyData } from '../types';
+import { PriceData, DailyData, MacroDataBundle } from '../types';
 
 /**
  * Calculate daily returns
@@ -111,11 +111,133 @@ export function handleOutliers(
 }
 
 /**
+ * Interpolate monthly data to daily using linear interpolation
+ * This is useful for M2 and Fed Funds which are released monthly
+ */
+export function interpolateMonthlyToDaily(
+  monthlyData: Map<string, number>,
+  startDate: string,
+  endDate: string
+): Map<string, number> {
+  const result = new Map<string, number>();
+
+  if (monthlyData.size === 0) return result;
+
+  // Sort the monthly dates
+  const sortedDates = Array.from(monthlyData.keys()).sort();
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const current = new Date(start);
+
+  while (current <= end) {
+    const dateStr = current.toISOString().split('T')[0];
+
+    // Find the surrounding monthly data points
+    let prevDate: string | null = null;
+    let nextDate: string | null = null;
+
+    for (const mDate of sortedDates) {
+      if (mDate <= dateStr) {
+        prevDate = mDate;
+      }
+      if (mDate >= dateStr && !nextDate) {
+        nextDate = mDate;
+      }
+    }
+
+    if (prevDate && nextDate && prevDate !== nextDate) {
+      // Linear interpolation
+      const prevValue = monthlyData.get(prevDate)!;
+      const nextValue = monthlyData.get(nextDate)!;
+      const prevTime = new Date(prevDate).getTime();
+      const nextTime = new Date(nextDate).getTime();
+      const currentTime = current.getTime();
+
+      const ratio = (currentTime - prevTime) / (nextTime - prevTime);
+      const interpolatedValue = prevValue + ratio * (nextValue - prevValue);
+      result.set(dateStr, interpolatedValue);
+    } else if (prevDate) {
+      // Use last known value (forward fill)
+      result.set(dateStr, monthlyData.get(prevDate)!);
+    } else if (nextDate) {
+      // Use next available value (backward fill for very early dates)
+      result.set(dateStr, monthlyData.get(nextDate)!);
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return result;
+}
+
+/**
+ * Calculate M2 year-over-year change
+ * Returns a decimal (e.g., 0.05 for 5% growth)
+ */
+export function calculateM2YoY(
+  m2Daily: Map<string, number>,
+  date: string
+): number | undefined {
+  const currentM2 = m2Daily.get(date);
+  if (currentM2 === undefined) return undefined;
+
+  // Get date from one year ago
+  const currentDate = new Date(date);
+  currentDate.setFullYear(currentDate.getFullYear() - 1);
+  const yearAgoDate = currentDate.toISOString().split('T')[0];
+
+  // Find closest date to year ago (within a week)
+  let yearAgoM2: number | undefined;
+  for (let i = 0; i <= 7; i++) {
+    const checkDate = new Date(yearAgoDate);
+    checkDate.setDate(checkDate.getDate() + i);
+    const checkDateStr = checkDate.toISOString().split('T')[0];
+    yearAgoM2 = m2Daily.get(checkDateStr);
+    if (yearAgoM2 !== undefined) break;
+
+    // Also check backwards
+    checkDate.setDate(checkDate.getDate() - 2 * i);
+    const checkDateStr2 = checkDate.toISOString().split('T')[0];
+    yearAgoM2 = m2Daily.get(checkDateStr2);
+    if (yearAgoM2 !== undefined) break;
+  }
+
+  if (yearAgoM2 === undefined || yearAgoM2 === 0) return undefined;
+
+  return (currentM2 - yearAgoM2) / yearAgoM2;
+}
+
+/**
+ * Get closest value from a map, looking back up to maxDays
+ */
+export function getClosestValue(
+  data: Map<string, number>,
+  date: string,
+  maxDays: number = 7
+): number | undefined {
+  // Try exact match first
+  const exact = data.get(date);
+  if (exact !== undefined) return exact;
+
+  // Look backwards
+  const current = new Date(date);
+  for (let i = 1; i <= maxDays; i++) {
+    current.setDate(current.getDate() - 1);
+    const checkDate = current.toISOString().split('T')[0];
+    const value = data.get(checkDate);
+    if (value !== undefined) return value;
+  }
+
+  return undefined;
+}
+
+/**
  * Normalize price data to daily format with computed fields
  */
 export function normalizeToDailyData(
   priceData: PriceData[],
-  dxyData?: Map<string, number>
+  macroData?: MacroDataBundle | Map<string, number>
 ): DailyData[] {
   // Fill missing dates
   const filled = fillMissingDates(priceData);
@@ -125,11 +247,47 @@ export function normalizeToDailyData(
   // Build price array for calculations
   const prices: number[] = filled.map(d => d.close);
 
+  // Determine date range
+  const startDate = filled[0].date;
+  const endDate = filled[filled.length - 1].date;
+
+  // Handle macro data - either MacroDataBundle or legacy Map<string, number> for DXY
+  let dxyData: Map<string, number> | undefined;
+  let m2Daily: Map<string, number> | undefined;
+  let fedFundsDaily: Map<string, number> | undefined;
+  let treasury10yData: Map<string, number> | undefined;
+  let treasury2yData: Map<string, number> | undefined;
+  let yieldSpreadData: Map<string, number> | undefined;
+  let realRateData: Map<string, number> | undefined;
+
+  if (macroData) {
+    if (macroData instanceof Map) {
+      // Legacy: just DXY data as a Map
+      dxyData = macroData;
+    } else {
+      // Full MacroDataBundle
+      dxyData = macroData.dxy;
+      treasury10yData = macroData.treasury10y;
+      treasury2yData = macroData.treasury2y;
+      yieldSpreadData = macroData.yieldSpread;
+      realRateData = macroData.realRate;
+
+      // Interpolate monthly data (M2, Fed Funds) to daily
+      if (macroData.m2.size > 0) {
+        m2Daily = interpolateMonthlyToDaily(macroData.m2, startDate, endDate);
+      }
+      if (macroData.fedFunds.size > 0) {
+        fedFundsDaily = interpolateMonthlyToDaily(macroData.fedFunds, startDate, endDate);
+      }
+    }
+  }
+
   const result: DailyData[] = [];
 
   for (let i = 0; i < filled.length; i++) {
     const record = filled[i];
     const price = record.close;
+    const date = record.date;
 
     // Calculate returns (handle early days gracefully)
     const return1d = i >= 1 ? calculateReturn(price, prices[i - 1]) : 0;
@@ -149,11 +307,20 @@ export function normalizeToDailyData(
     const realizedVol30d = calculateRealizedVol(pricesUpToNow, 30);
     const realizedVol90d = calculateRealizedVol(pricesUpToNow, 90);
 
-    // Add macro data if available
-    const dxy = dxyData?.get(record.date);
+    // Get macro data for this date
+    const dxy = getClosestValue(dxyData || new Map(), date);
+    const treasury10y = getClosestValue(treasury10yData || new Map(), date);
+    const treasury2y = getClosestValue(treasury2yData || new Map(), date);
+    const yieldSpread = getClosestValue(yieldSpreadData || new Map(), date);
+    const realRate = getClosestValue(realRateData || new Map(), date);
+    const m2 = m2Daily?.get(date);
+    const fedFunds = fedFundsDaily?.get(date);
+
+    // Calculate M2 YoY if we have M2 data
+    const m2YoY = m2Daily ? calculateM2YoY(m2Daily, date) : undefined;
 
     result.push({
-      date: record.date,
+      date,
       price,
       return1d,
       return7d,
@@ -167,6 +334,13 @@ export function normalizeToDailyData(
       realizedVol30d,
       realizedVol90d,
       dxy,
+      treasury10y,
+      treasury2y,
+      yieldSpread,
+      realRate,
+      m2,
+      m2YoY,
+      fedFunds,
     });
   }
 

@@ -8,13 +8,14 @@ import { FeatureVector, RiskOutput } from '../types';
 
 /**
  * Default component weights - optimized for peak/bottom detection
+ * Updated: Macro weight increased to 15% due to M2/Fed Funds indicators
  */
 export const DEFAULT_WEIGHTS: Record<string, number> = {
-  valuation: 0.25,   // Mayer multiple + drawdown
-  momentum: 0.30,    // RSI + ROC - key for extremes
-  volatility: 0.10,  // Background
+  valuation: 0.22,   // Mayer multiple + drawdown
+  momentum: 0.25,    // RSI + ROC - key for extremes
+  volatility: 0.08,  // Background
   cycle: 0.15,       // Timing context
-  macro: 0.05,       // Background factor
+  macro: 0.15,       // M2, Fed Funds, yield curve, real rates
   attention: 0.15,   // Retail FOMO/fear (uses vol as proxy)
 };
 
@@ -107,16 +108,20 @@ export function clampRisk(value: number): number {
 
 /**
  * Calculate final risk output from feature vector
+ * @param useDynamicMacroWeight - If true, adjusts macro weight based on regime volatility
  */
 export function calculateRisk(
   features: FeatureVector,
   weights: Record<string, number> = DEFAULT_WEIGHTS,
   calibrationParams: { slope: number; center: number } = DEFAULT_CALIBRATION,
   previousRisk?: number,
-  smoothingFactor: number = 0.3
+  smoothingFactor: number = 0.3,
+  useDynamicMacroWeight: boolean = true
 ): RiskOutput {
-  // Calculate raw ensemble
-  const rawScore = calculateRawEnsemble(features, weights);
+  // Calculate raw ensemble - use dynamic weighting if enabled
+  const rawScore = useDynamicMacroWeight
+    ? calculateRawEnsembleWithDynamicMacro(features, weights)
+    : calculateRawEnsemble(features, weights);
 
   // Apply calibration
   const calibrated = applyCalibration(
@@ -151,12 +156,14 @@ export function calculateRisk(
 
 /**
  * Calculate risk for entire feature array
+ * @param useDynamicMacroWeight - If true, adjusts macro weight based on regime volatility
  */
 export function calculateAllRisks(
   features: FeatureVector[],
   weights: Record<string, number> = DEFAULT_WEIGHTS,
   calibrationParams: { slope: number; center: number } = DEFAULT_CALIBRATION,
-  smoothingFactor: number = 0.3
+  smoothingFactor: number = 0.3,
+  useDynamicMacroWeight: boolean = true
 ): RiskOutput[] {
   const results: RiskOutput[] = [];
 
@@ -168,7 +175,8 @@ export function calculateAllRisks(
       weights,
       calibrationParams,
       previousRisk,
-      smoothingFactor
+      smoothingFactor,
+      useDynamicMacroWeight
     );
 
     results.push(output);
@@ -193,6 +201,69 @@ export function normalizeWeights(
   }
 
   return normalized;
+}
+
+/**
+ * Adjust weights for dynamic macro weighting
+ *
+ * When macro conditions are unusual (high variance), we increase the macro
+ * component's weight and proportionally reduce other weights.
+ *
+ * This ensures backward compatibility:
+ * - In stable macro environments (2017-2021), macro weight stays at 5%
+ * - In volatile macro environments (2022+), macro weight can increase to 15%
+ *
+ * @param baseWeights - The default weight configuration
+ * @param dynamicMacroWeight - The calculated dynamic weight for macro (0.05-0.15)
+ * @returns Adjusted weights that sum to 1
+ */
+export function adjustWeightsForDynamicMacro(
+  baseWeights: Record<string, number>,
+  dynamicMacroWeight: number
+): Record<string, number> {
+  const normalizedBase = normalizeWeights(baseWeights);
+  const baseMacro = normalizedBase.macro || 0.05;
+
+  // If dynamic weight is same as base, no adjustment needed
+  if (Math.abs(dynamicMacroWeight - baseMacro) < 0.001) {
+    return normalizedBase;
+  }
+
+  // Calculate how much macro weight is changing
+  const delta = dynamicMacroWeight - baseMacro;
+
+  // Reduce other weights proportionally to accommodate macro increase
+  const otherWeights = 1 - baseMacro;
+  const scaleFactor = (otherWeights - delta) / otherWeights;
+
+  const adjusted: Record<string, number> = {};
+  for (const [key, value] of Object.entries(normalizedBase)) {
+    if (key === 'macro') {
+      adjusted[key] = dynamicMacroWeight;
+    } else {
+      adjusted[key] = value * scaleFactor;
+    }
+  }
+
+  return adjusted;
+}
+
+/**
+ * Calculate raw ensemble score with optional dynamic macro weighting
+ */
+export function calculateRawEnsembleWithDynamicMacro(
+  features: FeatureVector,
+  weights: Record<string, number> = DEFAULT_WEIGHTS
+): number {
+  // Check if dynamic macro weight is available
+  const dynamicMacroWeight = features.dynamicMacroWeight;
+
+  // Adjust weights if dynamic macro weight is different from base
+  const effectiveWeights = dynamicMacroWeight !== undefined && dynamicMacroWeight !== weights.macro
+    ? adjustWeightsForDynamicMacro(weights, dynamicMacroWeight)
+    : weights;
+
+  return calculateRawEnsemble(features, effectiveWeights);
 }
 
 /**

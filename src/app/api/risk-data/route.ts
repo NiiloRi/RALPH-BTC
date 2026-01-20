@@ -4,9 +4,12 @@
  *
  * Fetches ALL historical data from Binance (2017+) and calculates risk
  * Now with cycle-relative valuation for accurate bottom detection
+ * Enhanced with macro indicators (M2, Fed Funds, Treasury yields)
  */
 
 import { NextResponse } from 'next/server';
+import { fetchAllMacroData, loadMacroCache, saveMacroCache } from '@/lib/data/price-fetcher';
+import type { MacroDataBundle } from '@/lib/types';
 
 // Binance kline format
 type BinanceKline = [number, string, string, string, string, string, number, string, number, string, string, string];
@@ -60,13 +63,14 @@ const HISTORICAL_CYCLES: CycleData[] = [
 ];
 
 // Component weights - optimized for peak/bottom detection
+// Updated: Macro weight increased to 15% due to new M2/Fed Funds indicators
 const DEFAULT_WEIGHTS = {
-  valuation: 0.25,   // Mayer multiple
-  momentum: 0.30,    // RSI/momentum - key for extremes (increased)
-  volatility: 0.10,  // Background
-  cycle: 0.15,       // Timing context
-  macro: 0.05,       // Background factor
-  attention: 0.15,   // Retail FOMO/fear
+  valuation: 0.22,   // Mayer multiple (reduced from 0.25)
+  momentum: 0.25,    // RSI/momentum - key for extremes (reduced from 0.30)
+  volatility: 0.08,  // Background (reduced from 0.10)
+  cycle: 0.15,       // Timing context (unchanged)
+  macro: 0.15,       // M2, Fed Funds, yield curve, real rates (increased from 0.05!)
+  attention: 0.15,   // Retail FOMO/fear (unchanged)
 };
 
 // Calibration params - slope=12, center=0.45 for better peak detection
@@ -383,15 +387,188 @@ function calculateAttentionScore(
   return attentionProxy * 0.6 + fearGreedProxy * 0.4;
 }
 
+// ============================================================
+// MACRO SIGNAL CALCULATIONS
+// ============================================================
+
+/**
+ * Calculate M2 year-over-year change
+ */
+function calculateM2YoY(
+  m2Daily: Map<string, number>,
+  date: string
+): number | undefined {
+  const currentM2 = m2Daily.get(date);
+  if (currentM2 === undefined) return undefined;
+
+  // Get date from one year ago
+  const currentDate = new Date(date);
+  currentDate.setFullYear(currentDate.getFullYear() - 1);
+  const yearAgoDate = currentDate.toISOString().split('T')[0];
+
+  // Find closest date within a week
+  for (let i = 0; i <= 7; i++) {
+    const checkDate = new Date(yearAgoDate);
+    checkDate.setDate(checkDate.getDate() + i);
+    const checkDateStr = checkDate.toISOString().split('T')[0];
+    const yearAgoM2 = m2Daily.get(checkDateStr);
+    if (yearAgoM2 !== undefined && yearAgoM2 > 0) {
+      return (currentM2 - yearAgoM2) / yearAgoM2;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Interpolate monthly data to daily
+ */
+function interpolateMonthlyToDaily(
+  monthlyData: Map<string, number>,
+  dates: string[]
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (monthlyData.size === 0) return result;
+
+  const sortedMonthlyDates = Array.from(monthlyData.keys()).sort();
+
+  for (const dateStr of dates) {
+    let prevDate: string | null = null;
+    let nextDate: string | null = null;
+
+    for (const mDate of sortedMonthlyDates) {
+      if (mDate <= dateStr) prevDate = mDate;
+      if (mDate >= dateStr && !nextDate) nextDate = mDate;
+    }
+
+    if (prevDate && nextDate && prevDate !== nextDate) {
+      const prevValue = monthlyData.get(prevDate)!;
+      const nextValue = monthlyData.get(nextDate)!;
+      const prevTime = new Date(prevDate).getTime();
+      const nextTime = new Date(nextDate).getTime();
+      const currentTime = new Date(dateStr).getTime();
+      const ratio = (currentTime - prevTime) / (nextTime - prevTime);
+      result.set(dateStr, prevValue + ratio * (nextValue - prevValue));
+    } else if (prevDate) {
+      result.set(dateStr, monthlyData.get(prevDate)!);
+    } else if (nextDate) {
+      result.set(dateStr, monthlyData.get(nextDate)!);
+    }
+  }
+  return result;
+}
+
+/**
+ * Calculate M2 signal (0 = bearish, 1 = bullish)
+ */
+function calculateM2Signal(m2YoY: number | undefined): number {
+  if (m2YoY === undefined) return 0.5;
+  // M2 YoY range: -3% to +15%
+  const normalized = (m2YoY + 0.03) / 0.18;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+/**
+ * Calculate Fed Funds signal (0 = bearish/high rates, 1 = bullish/low rates)
+ */
+function calculateFedFundsSignal(fedFunds: number | undefined): number {
+  if (fedFunds === undefined) return 0.5;
+  const normalized = 1 - (fedFunds / 6);
+  return Math.max(0, Math.min(1, normalized));
+}
+
+/**
+ * Calculate yield curve signal (0 = inverted/bearish, 1 = normal/bullish)
+ */
+function calculateYieldCurveSignal(spread: number | undefined): number {
+  if (spread === undefined) return 0.5;
+  const normalized = (spread + 1) / 3;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+/**
+ * Calculate real rate signal (0 = positive rates/bearish, 1 = negative rates/bullish)
+ */
+function calculateRealRateSignal(realRate: number | undefined): number {
+  if (realRate === undefined) return 0.5;
+  const normalized = (-realRate + 2) / 4;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+/**
+ * Calculate composite macro score from all signals
+ */
+function calculateMacroScoreFromSignals(
+  m2YoY: number | undefined,
+  fedFunds: number | undefined,
+  yieldSpread: number | undefined,
+  realRate: number | undefined
+): number {
+  const weights = { m2: 0.35, fedFunds: 0.25, yieldCurve: 0.20, realRate: 0.20 };
+  let score = 0;
+  let totalWeight = 0;
+
+  if (m2YoY !== undefined) {
+    score += calculateM2Signal(m2YoY) * weights.m2;
+    totalWeight += weights.m2;
+  }
+  if (fedFunds !== undefined) {
+    score += calculateFedFundsSignal(fedFunds) * weights.fedFunds;
+    totalWeight += weights.fedFunds;
+  }
+  if (yieldSpread !== undefined) {
+    score += calculateYieldCurveSignal(yieldSpread) * weights.yieldCurve;
+    totalWeight += weights.yieldCurve;
+  }
+  if (realRate !== undefined) {
+    score += calculateRealRateSignal(realRate) * weights.realRate;
+    totalWeight += weights.realRate;
+  }
+
+  return totalWeight > 0 ? score / totalWeight : 0.5;
+}
+
+/**
+ * Get closest value from a map, looking back up to maxDays
+ */
+function getClosestValue(
+  data: Map<string, number>,
+  date: string,
+  maxDays: number = 7
+): number | undefined {
+  const exact = data.get(date);
+  if (exact !== undefined) return exact;
+
+  const current = new Date(date);
+  for (let i = 1; i <= maxDays; i++) {
+    current.setDate(current.getDate() - 1);
+    const checkDate = current.toISOString().split('T')[0];
+    const value = data.get(checkDate);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Prepared macro data for a single date
+ */
+interface MacroDataForDate {
+  m2YoY: number | undefined;
+  fedFunds: number | undefined;
+  yieldSpread: number | undefined;
+  realRate: number | undefined;
+}
+
 /**
  * Calculate risk score for a single data point
  * Optimized for detecting cycle peaks and bottoms
+ * Now includes macro indicators for improved cycle detection
  */
 function calculateRisk(
   prices: number[],
   index: number,
   date: Date,
-  avgVol: number
+  avgVol: number,
+  macroData?: MacroDataForDate
 ): { risk: number; components: RiskDataPoint['components']; cyclePhase: 'early' | 'mid' | 'late' } {
   const price = prices[index];
   const priceHistory = prices.slice(0, index + 1);
@@ -430,8 +607,15 @@ function calculateRisk(
   // Cycle score based on progress
   const cycleScore = cycleInfo.progress;
 
-  // Macro (placeholder)
-  const macroScore = 0.5;
+  // Macro score - now using real data when available
+  const macroScore = macroData
+    ? calculateMacroScoreFromSignals(
+        macroData.m2YoY,
+        macroData.fedFunds,
+        macroData.yieldSpread,
+        macroData.realRate
+      )
+    : 0.5;
 
   // Attention: full calculation with ATH proximity, returns, fear/greed
   const attentionScore = calculateAttentionScore(prices, index, sma200, vol30d, avgVol);
@@ -483,6 +667,33 @@ export async function GET() {
     }
 
     const prices = priceData.map(d => d.close);
+    const allDates = priceData.map(d => d.date);
+    const startDate = allDates[0];
+    const endDate = allDates[allDates.length - 1];
+
+    // Fetch macro data from FRED (in parallel conceptually, uses cache)
+    let macroBundle: MacroDataBundle | null = null;
+    let m2Daily: Map<string, number> = new Map();
+    let fedFundsDaily: Map<string, number> = new Map();
+
+    try {
+      // Try cache first, then fetch if needed
+      macroBundle = loadMacroCache(168); // 7 day cache
+      if (!macroBundle) {
+        macroBundle = await fetchAllMacroData(startDate, endDate);
+        if (macroBundle) {
+          saveMacroCache(macroBundle);
+        }
+      }
+
+      if (macroBundle) {
+        // Interpolate monthly data to daily
+        m2Daily = interpolateMonthlyToDaily(macroBundle.m2, allDates);
+        fedFundsDaily = interpolateMonthlyToDaily(macroBundle.fedFunds, allDates);
+      }
+    } catch (macroError) {
+      console.warn('Failed to fetch macro data, continuing without:', macroError);
+    }
 
     // Calculate risk for each data point (skip first 200 for enough history)
     const startIdx = Math.min(200, Math.floor(priceData.length * 0.1));
@@ -501,6 +712,7 @@ export async function GET() {
 
     for (let i = startIdx; i < priceData.length; i++) {
       const date = new Date(priceData[i].date);
+      const dateStr = priceData[i].date;
 
       // Calculate rolling average vol (last 365 days or available)
       const volStartIdx = Math.max(0, i - 365 - 30);
@@ -513,7 +725,17 @@ export async function GET() {
           : overallAvgVol;
       }
 
-      const { risk, components, cyclePhase } = calculateRisk(prices, i, date, avgVol);
+      // Get macro data for this date
+      const macroDataForDate: MacroDataForDate | undefined = macroBundle
+        ? {
+            m2YoY: calculateM2YoY(m2Daily, dateStr),
+            fedFunds: fedFundsDaily.get(dateStr),
+            yieldSpread: getClosestValue(macroBundle.yieldSpread, dateStr),
+            realRate: getClosestValue(macroBundle.realRate, dateStr),
+          }
+        : undefined;
+
+      const { risk, components, cyclePhase } = calculateRisk(prices, i, date, avgVol, macroDataForDate);
 
       rawRisks.push(risk);
       riskData.push({
@@ -542,6 +764,7 @@ export async function GET() {
         start: priceData[0]?.date,
         end: priceData[priceData.length - 1]?.date,
       },
+      macroDataAvailable: macroBundle !== null,
     });
   } catch (error) {
     console.error('Error fetching risk data:', error);

@@ -26,7 +26,15 @@ import {
   getPreviousCycleRange,
   getCycleRelativePrice,
 } from './cycle';
-import { calculateMacroScore, getMacroComponents } from './macro';
+import {
+  calculateMacroScore,
+  getMacroComponents,
+  calculateM2Signal,
+  calculateFedFundsSignal,
+  calculateYieldCurveSignal,
+  calculateRealRateSignal,
+  calculateDynamicMacroWeight,
+} from './macro';
 import { calculateAttentionScore, getAttentionComponents } from './attention';
 
 /**
@@ -64,6 +72,10 @@ export function buildFeatureVector(
   const valComponents = getValuationComponents(data, index, daysGenesis);
   const momComponents = getMomentumComponents(data, index);
   const volComponents = getVolatilityComponents(data, index);
+  const macroComponents = getMacroComponents(data, index);
+
+  // Calculate dynamic macro weight based on regime volatility
+  const dynamicMacroWeight = calculateDynamicMacroWeight(data, index);
 
   return {
     date: current.date,
@@ -88,8 +100,15 @@ export function buildFeatureVector(
     prevCycleLow: prevCycleRange.low,
     prevCycleHigh: prevCycleRange.high,
     cycleRelativePrice,
+    // Macro features
     macroScore,
-    dxyZScore: getMacroComponents(data, index).dxyZScore,
+    dxyZScore: macroComponents.dxySignal,
+    m2Signal: macroComponents.m2Signal,
+    fedFundsSignal: macroComponents.fedFundsSignal,
+    yieldCurveSignal: macroComponents.yieldCurveSignal,
+    realRateSignal: macroComponents.realRateSignal,
+    dynamicMacroWeight,
+    // Other features
     attentionScore,
     price: current.price,
   };

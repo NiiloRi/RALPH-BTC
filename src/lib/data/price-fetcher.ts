@@ -3,11 +3,22 @@
  * Uses free public APIs with caching
  */
 
-import { PriceData, CacheMetadata } from '../types';
+import { PriceData, CacheMetadata, MacroDataBundle } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const CACHE_DIR = path.join(process.cwd(), 'data', 'raw');
+
+// FRED API series IDs for macro indicators
+export const FRED_SERIES = {
+  M2: 'M2SL',           // M2 Money Stock (monthly, seasonally adjusted)
+  FEDFUNDS: 'FEDFUNDS', // Effective Federal Funds Rate (monthly)
+  DGS10: 'DGS10',       // 10-Year Treasury Constant Maturity (daily)
+  DGS2: 'DGS2',         // 2-Year Treasury Constant Maturity (daily)
+  T10Y2Y: 'T10Y2Y',     // 10-Year minus 2-Year Treasury Spread (daily)
+  DFII10: 'DFII10',     // 10-Year Treasury Inflation-Indexed (TIPS, daily)
+  DXY: 'DTWEXBGS',      // Trade Weighted U.S. Dollar Index (daily)
+} as const;
 
 interface CoinGeckoOHLC {
   prices: [number, number][];
@@ -192,6 +203,190 @@ export async function fetchDXYData(
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch a single FRED series
+ * Returns a Map of date -> value
+ */
+export async function fetchFREDSeries(
+  seriesId: string,
+  startDate: string,
+  endDate: string
+): Promise<Map<string, number> | null> {
+  const apiKey = process.env.FRED_API_KEY;
+
+  if (!apiKey) {
+    return null;
+  }
+
+  try {
+    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${apiKey}&file_type=json&observation_start=${startDate}&observation_end=${endDate}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn(`FRED API error for ${seriesId}: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const result = new Map<string, number>();
+
+    for (const obs of data.observations || []) {
+      if (obs.value !== '.' && obs.value !== '') {
+        result.set(obs.date, parseFloat(obs.value));
+      }
+    }
+
+    return result;
+  } catch (error) {
+    console.warn(`FRED fetch failed for ${seriesId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fetch all macro data from FRED API
+ * Returns a MacroDataBundle with all available indicators
+ */
+export async function fetchAllMacroData(
+  startDate: string,
+  endDate: string
+): Promise<MacroDataBundle | null> {
+  const apiKey = process.env.FRED_API_KEY;
+
+  if (!apiKey) {
+    console.warn('Macro data unavailable - FRED_API_KEY not set');
+    return null;
+  }
+
+  console.log('Fetching macro data from FRED...');
+
+  // Fetch all series in parallel
+  const [m2Data, fedFundsData, treasury10yData, treasury2yData, yieldSpreadData, realRateData, dxyData] = await Promise.all([
+    fetchFREDSeries(FRED_SERIES.M2, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.FEDFUNDS, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.DGS10, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.DGS2, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.T10Y2Y, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.DFII10, startDate, endDate),
+    fetchFREDSeries(FRED_SERIES.DXY, startDate, endDate),
+  ]);
+
+  // Check if we got any data
+  const hasData = m2Data || fedFundsData || treasury10yData || treasury2yData || yieldSpreadData || realRateData || dxyData;
+
+  if (!hasData) {
+    console.warn('No macro data fetched from FRED');
+    return null;
+  }
+
+  const bundle: MacroDataBundle = {
+    m2: m2Data || new Map(),
+    fedFunds: fedFundsData || new Map(),
+    treasury10y: treasury10yData || new Map(),
+    treasury2y: treasury2yData || new Map(),
+    yieldSpread: yieldSpreadData || new Map(),
+    realRate: realRateData || new Map(),
+    dxy: dxyData || new Map(),
+  };
+
+  console.log(`Fetched macro data: M2=${bundle.m2.size}, FedFunds=${bundle.fedFunds.size}, ` +
+    `10Y=${bundle.treasury10y.size}, 2Y=${bundle.treasury2y.size}, Spread=${bundle.yieldSpread.size}, ` +
+    `RealRate=${bundle.realRate.size}, DXY=${bundle.dxy.size} data points`);
+
+  return bundle;
+}
+
+/**
+ * Save macro data bundle to cache
+ */
+export function saveMacroCache(bundle: MacroDataBundle): void {
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+
+  const cachePath = path.join(CACHE_DIR, 'macro_fred.json');
+
+  // Convert Maps to arrays for JSON serialization
+  const serializable = {
+    m2: Array.from(bundle.m2.entries()),
+    fedFunds: Array.from(bundle.fedFunds.entries()),
+    treasury10y: Array.from(bundle.treasury10y.entries()),
+    treasury2y: Array.from(bundle.treasury2y.entries()),
+    yieldSpread: Array.from(bundle.yieldSpread.entries()),
+    realRate: Array.from(bundle.realRate.entries()),
+    dxy: Array.from(bundle.dxy.entries()),
+    lastFetch: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(cachePath, JSON.stringify(serializable, null, 2));
+  console.log('Macro data cached successfully');
+}
+
+/**
+ * Load macro data bundle from cache
+ */
+export function loadMacroCache(maxAgeHours: number = 168): MacroDataBundle | null {
+  const cachePath = path.join(CACHE_DIR, 'macro_fred.json');
+
+  if (!fs.existsSync(cachePath)) {
+    return null;
+  }
+
+  try {
+    const content = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+
+    // Check age
+    const lastFetch = new Date(content.lastFetch);
+    const ageHours = (Date.now() - lastFetch.getTime()) / (1000 * 60 * 60);
+
+    if (ageHours > maxAgeHours) {
+      console.log('Macro cache expired');
+      return null;
+    }
+
+    // Convert arrays back to Maps
+    const bundle: MacroDataBundle = {
+      m2: new Map(content.m2),
+      fedFunds: new Map(content.fedFunds),
+      treasury10y: new Map(content.treasury10y),
+      treasury2y: new Map(content.treasury2y),
+      yieldSpread: new Map(content.yieldSpread),
+      realRate: new Map(content.realRate),
+      dxy: new Map(content.dxy),
+    };
+
+    console.log(`Loaded macro data from cache (age: ${ageHours.toFixed(1)}h)`);
+    return bundle;
+  } catch (error) {
+    console.warn('Failed to load macro cache:', error);
+    return null;
+  }
+}
+
+/**
+ * Get macro data - from cache if fresh, otherwise fetch
+ */
+export async function getMacroData(
+  startDate: string,
+  endDate: string,
+  forceRefresh = false
+): Promise<MacroDataBundle | null> {
+  if (!forceRefresh) {
+    const cached = loadMacroCache();
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const fresh = await fetchAllMacroData(startDate, endDate);
+
+  if (fresh) {
+    saveMacroCache(fresh);
+  }
+
+  return fresh;
 }
 
 /**
