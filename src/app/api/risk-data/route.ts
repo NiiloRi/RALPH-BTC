@@ -36,6 +36,12 @@ interface RiskDataPoint {
     macro: number;
     attention: number;
   };
+  macroComponents?: {
+    m2Signal: number;
+    fedFundsSignal: number;
+    yieldCurveSignal: number;
+    realRateSignal: number;
+  };
   cyclePhase: 'early' | 'mid' | 'late';
   isHalving: boolean;
 }
@@ -52,14 +58,22 @@ const HALVING_DATES = [
 interface CycleData {
   halvingDate: string;
   low: number;
+  lowDate: string;
   high: number;
+  highDate: string;
 }
 
 const HISTORICAL_CYCLES: CycleData[] = [
-  { halvingDate: '2012-11-28', low: 2, high: 1150 },
-  { halvingDate: '2016-07-09', low: 200, high: 19800 },
-  { halvingDate: '2020-05-11', low: 3200, high: 69000 },
-  { halvingDate: '2024-04-20', low: 15500, high: 73800 },
+  // Cycle 0: Pre-first-halving (genesis to first halving)
+  { halvingDate: '2012-11-28', low: 0.05, lowDate: '2010-07-17', high: 32, highDate: '2011-06-08' },
+  // Cycle 1: First halving
+  { halvingDate: '2012-11-28', low: 2, lowDate: '2011-11-18', high: 1150, highDate: '2013-12-04' },
+  // Cycle 2: Second halving
+  { halvingDate: '2016-07-09', low: 200, lowDate: '2015-01-14', high: 19800, highDate: '2017-12-17' },
+  // Cycle 3: Third halving
+  { halvingDate: '2020-05-11', low: 3200, lowDate: '2018-12-15', high: 69000, highDate: '2021-11-10' },
+  // Cycle 4: Fourth halving (current)
+  { halvingDate: '2024-04-20', low: 15500, lowDate: '2022-11-21', high: 73800, highDate: '2024-03-14' },
 ];
 
 // Component weights - optimized for peak/bottom detection
@@ -78,6 +92,32 @@ const DEFAULT_CALIBRATION = {
   slope: 12,
   center: 0.45,
 };
+
+// Historical data stored as static JSON (2010-2017, before Binance)
+import historicalData from '../../../../public/btc_historical.json';
+
+interface HistoricalDataPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/**
+ * Load pre-Binance historical data (2010-2017)
+ */
+function loadHistoricalData(): PriceData[] {
+  return (historicalData as HistoricalDataPoint[]).map(d => ({
+    date: d.date,
+    open: d.open,
+    high: d.high,
+    low: d.low,
+    close: d.close,
+    volume: d.volume,
+  }));
+}
 
 /**
  * Fetch ALL BTC data from Binance (from 2017-08-17 onwards)
@@ -233,22 +273,119 @@ function calculateCycleRelativeValuation(
 
 /**
  * Get cycle phase based on days since halving
+ * IMPROVED: Uses time from cycle LOW, not just halving
  */
-function getCycleInfo(date: Date): { daysSinceHalving: number; phase: 'early' | 'mid' | 'late'; progress: number } {
-  let lastHalving = HALVING_DATES[0];
-  for (const halving of HALVING_DATES) {
-    if (date >= halving) lastHalving = halving;
+function getCycleInfo(date: Date): {
+  daysSinceHalving: number;
+  daysSinceLow: number;
+  phase: 'early' | 'mid' | 'late';
+  progress: number;
+  cycleScore: number;
+} {
+  // Find the current cycle based on which cycle LOW we're after
+  // This is more accurate than using halving dates because the cycle
+  // starts from the low, not the halving
+  let cycleIdx = 0;
+  for (let i = HISTORICAL_CYCLES.length - 1; i >= 0; i--) {
+    const cycleLow = new Date(HISTORICAL_CYCLES[i].lowDate);
+    if (date >= cycleLow) {
+      cycleIdx = i;
+      break;
+    }
   }
 
-  const daysSince = Math.floor((date.getTime() - lastHalving.getTime()) / (1000 * 60 * 60 * 24));
-  const cycleLength = 1460; // ~4 years
-  const progress = Math.min(daysSince / cycleLength, 1);
+  const currentCycle = HISTORICAL_CYCLES[cycleIdx];
+  const cycleLowDate = new Date(currentCycle.lowDate);
+  const daysSinceLow = Math.max(0, Math.floor(
+    (date.getTime() - cycleLowDate.getTime()) / (1000 * 60 * 60 * 24)
+  ));
 
+  // Find the relevant halving for this cycle
+  const cycleHalvingDate = new Date(currentCycle.halvingDate);
+  const daysSinceHalving = Math.floor(
+    (date.getTime() - cycleHalvingDate.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  // Typical cycle from low to peak: ~1000-1200 days
+  const typicalLowToPeak = 1100;
+  const progressFromLow = Math.min(1.5, daysSinceLow / typicalLowToPeak);
+
+  // Progress from halving (secondary)
+  const cycleLength = 1460;
+  const progressFromHalving = daysSinceHalving / cycleLength;
+
+  // Determine phase based on progress from LOW
   let phase: 'early' | 'mid' | 'late' = 'early';
-  if (progress > 0.66) phase = 'late';
-  else if (progress > 0.33) phase = 'mid';
+  if (progressFromLow > 0.75) phase = 'late';
+  else if (progressFromLow > 0.40) phase = 'mid';
 
-  return { daysSinceHalving: daysSince, phase, progress };
+  // Calculate improved cycle score
+  // Pre-halving risk: approaching halving with elevated progress from low
+  // This captures front-running behavior (e.g., 2024 ATH before halving)
+  let preHalvingRisk = 0;
+  if (daysSinceHalving < 0) {
+    // Days until halving (negative daysSinceHalving means before halving)
+    const daysUntilHalving = -daysSinceHalving;
+
+    // Risk increases as we approach halving with meaningful progress
+    // Even at 40% progress, if we're close to halving, risk should be elevated
+    if (progressFromLow > 0.3 && daysUntilHalving < 180) {
+      // Close to halving and making progress = elevated risk
+      const proximityFactor = 1 - daysUntilHalving / 180;
+      const progressFactor = (progressFromLow - 0.3) / 0.4; // 0.3 to 0.7 range
+      preHalvingRisk = Math.min(0.35, proximityFactor * progressFactor * 0.35);
+    }
+
+    // Additional boost if progress is very high pre-halving (strong front-running)
+    if (progressFromLow > 0.5) {
+      preHalvingRisk += Math.min(0.15, (progressFromLow - 0.5) * 0.3);
+    }
+  }
+
+  // Post-halving caution (first 180 days)
+  // Risk floor - don't assume instant safety after halving
+  let postHalvingCaution = 0;
+  if (daysSinceHalving >= 0 && daysSinceHalving < 180) {
+    // Starts at 0.30 and decays to 0 over 180 days
+    postHalvingCaution = 0.30 * (1 - daysSinceHalving / 180);
+  }
+
+  // Peak risk window: 400-700 days post-halving historically
+  // This is when most cycle tops occur
+  const peakRiskDays = 550; // center of peak window
+  const daysDiff = Math.abs(daysSinceHalving - peakRiskDays);
+  const peakWindowProximity = Math.max(0, 1 - daysDiff / 350);
+
+  // Combined cycle score
+  // Weight distribution:
+  // - Progress from low: 35% (primary driver)
+  // - Progress from halving: 20% (secondary timing)
+  // - Peak window: 20% (historical pattern)
+  // - Pre/post halving adjustments: 25% (dynamic adjustments)
+  const baseScore =
+    progressFromLow * 0.35 +
+    Math.min(1, Math.max(0, progressFromHalving)) * 0.20 +
+    peakWindowProximity * 0.20 +
+    preHalvingRisk +
+    postHalvingCaution;
+
+  // Smooth with quadratic curve
+  const smoothed = baseScore < 0.5
+    ? 2 * baseScore * baseScore
+    : 1 - 2 * Math.pow(1 - baseScore, 2);
+
+  const cycleScore = Math.min(1, Math.max(0, smoothed));
+
+  // Return combined progress (weighted)
+  const combinedProgress = progressFromLow * 0.6 + Math.min(1, progressFromHalving) * 0.4;
+
+  return {
+    daysSinceHalving,
+    daysSinceLow,
+    phase,
+    progress: Math.min(1, combinedProgress),
+    cycleScore,
+  };
 }
 
 /**
@@ -569,7 +706,7 @@ function calculateRisk(
   date: Date,
   avgVol: number,
   macroData?: MacroDataForDate
-): { risk: number; components: RiskDataPoint['components']; cyclePhase: 'early' | 'mid' | 'late' } {
+): { risk: number; components: RiskDataPoint['components']; macroComponents?: RiskDataPoint['macroComponents']; cyclePhase: 'early' | 'mid' | 'late' } {
   const price = prices[index];
   const priceHistory = prices.slice(0, index + 1);
 
@@ -604,10 +741,17 @@ function calculateRisk(
   const vol30d = calculateVolatility(priceHistory, 30);
   const volatilityScore = Math.min(vol30d / 1.5, 1);
 
-  // Cycle score based on progress
-  const cycleScore = cycleInfo.progress;
+  // Cycle score - uses improved calculation from getCycleInfo
+  // (Based on time from LOW, not just halving, with front-running detection)
+  const cycleScore = cycleInfo.cycleScore;
 
   // Macro score - now using real data when available
+  // Calculate individual signals
+  const m2Signal = calculateM2Signal(macroData?.m2YoY);
+  const fedFundsSignal = calculateFedFundsSignal(macroData?.fedFunds);
+  const yieldCurveSignal = calculateYieldCurveSignal(macroData?.yieldSpread);
+  const realRateSignal = calculateRealRateSignal(macroData?.realRate);
+
   const macroScore = macroData
     ? calculateMacroScoreFromSignals(
         macroData.m2YoY,
@@ -616,6 +760,14 @@ function calculateRisk(
         macroData.realRate
       )
     : 0.5;
+
+  // Store individual macro components
+  const macroComponents = macroData ? {
+    m2Signal,
+    fedFundsSignal,
+    yieldCurveSignal,
+    realRateSignal,
+  } : undefined;
 
   // Attention: full calculation with ATH proximity, returns, fear/greed
   const attentionScore = calculateAttentionScore(prices, index, sma200, vol30d, avgVol);
@@ -642,7 +794,7 @@ function calculateRisk(
   const calibrated = applyCalibration(rawScore);
   const risk = Math.max(0, Math.min(1, calibrated));
 
-  return { risk, components, cyclePhase: cycleInfo.phase };
+  return { risk, components, macroComponents, cyclePhase: cycleInfo.phase };
 }
 
 /**
@@ -659,8 +811,20 @@ function smoothRisks(risks: number[], alpha: number = 0.3): number[] {
 
 export async function GET() {
   try {
-    // Fetch ALL data from Binance (2017+)
-    const priceData = await fetchAllBinanceData();
+    // Load historical data (2010-2017, static)
+    const historicalPriceData = loadHistoricalData();
+    console.log(`Loaded ${historicalPriceData.length} days of historical data (2010-2017)`);
+
+    // Fetch live data from Binance (2017+)
+    const binancePriceData = await fetchAllBinanceData();
+    console.log(`Loaded ${binancePriceData.length} days from Binance (2017+)`);
+
+    // Combine: historical + Binance (avoid duplicates)
+    const binanceStartDate = binancePriceData[0]?.date || '2017-08-17';
+    const uniqueHistorical = historicalPriceData.filter(d => d.date < binanceStartDate);
+    const priceData = [...uniqueHistorical, ...binancePriceData];
+
+    console.log(`Combined total: ${priceData.length} days (${priceData[0]?.date} to ${priceData[priceData.length-1]?.date})`);
 
     if (priceData.length === 0) {
       return NextResponse.json({ error: 'No data available' }, { status: 500 });
@@ -735,7 +899,7 @@ export async function GET() {
           }
         : undefined;
 
-      const { risk, components, cyclePhase } = calculateRisk(prices, i, date, avgVol, macroDataForDate);
+      const { risk, components, macroComponents, cyclePhase } = calculateRisk(prices, i, date, avgVol, macroDataForDate);
 
       rawRisks.push(risk);
       riskData.push({
@@ -744,6 +908,7 @@ export async function GET() {
         risk,
         smoothedRisk: risk,
         components,
+        macroComponents,
         cyclePhase,
         isHalving: isHalvingDate(date),
       });

@@ -167,6 +167,15 @@ export interface CycleData {
 }
 
 export const HISTORICAL_CYCLES: CycleData[] = [
+  // Cycle 0: Pre-first-halving (genesis to first halving)
+  {
+    halvingDate: '2012-11-28',
+    low: 0.05,
+    lowDate: '2010-07-17',
+    high: 32,
+    highDate: '2011-06-08',
+  },
+  // Cycle 1: First halving
   {
     halvingDate: '2012-11-28',
     low: 2,
@@ -174,6 +183,7 @@ export const HISTORICAL_CYCLES: CycleData[] = [
     high: 1150,
     highDate: '2013-12-04',
   },
+  // Cycle 2: Second halving
   {
     halvingDate: '2016-07-09',
     low: 200,
@@ -181,6 +191,7 @@ export const HISTORICAL_CYCLES: CycleData[] = [
     high: 19800,
     highDate: '2017-12-17',
   },
+  // Cycle 3: Third halving
   {
     halvingDate: '2020-05-11',
     low: 3200,
@@ -188,11 +199,12 @@ export const HISTORICAL_CYCLES: CycleData[] = [
     high: 69000,
     highDate: '2021-11-10',
   },
+  // Cycle 4: Fourth halving (current)
   {
     halvingDate: '2024-04-20',
     low: 15500,
     lowDate: '2022-11-21',
-    high: 73800,      // Current cycle high (will update)
+    high: 73800,
     highDate: '2024-03-14',
   },
 ];
@@ -238,40 +250,124 @@ export function getCycleRelativePrice(price: number, date: Date): number {
 /**
  * Calculate comprehensive cycle score [0, 1]
  * Higher = later in cycle = potentially higher risk
+ *
+ * IMPROVED: Does NOT reset sharply at halving
+ * - Uses time from cycle LOW, not halving
+ * - Accounts for front-running (ATH before halving)
+ * - Post-halving corrections are expected, not instant safety
  */
 export function calculateCycleScore(date: Date): number {
-  const halvingIdx = getHalvingIndex(date);
-  const daysSH = daysSinceHalving(date);
-
-  // Get peaks that were known before this date
-  const knownPeaks = HISTORICAL_PEAKS.filter(p => p < date);
-
-  const cycleLength = estimateCycleLength(halvingIdx, knownPeaks);
-  const progress = getCycleProgress(daysSH, cycleLength);
-  const phase = getCyclePhase(daysSH, cycleLength);
-
-  // Base score from cycle progress
-  let baseScore = Math.min(1, Math.max(0, progress));
-
-  // Adjust for phase
-  // Early phase: lower base risk
-  // Late phase: higher risk, especially after 80% progress
-  if (phase === 'early') {
-    baseScore *= 0.7;
-  } else if (phase === 'late') {
-    // Exponential increase in late phase
-    const lateProgress = (progress - 0.66) / 0.34;
-    baseScore = 0.66 + 0.34 * Math.pow(lateProgress, 0.7);
+  // Find cycle based on which LOW we're after (not halving)
+  let cycleIdx = 0;
+  for (let i = HISTORICAL_CYCLES.length - 1; i >= 0; i--) {
+    const cycleLow = new Date(HISTORICAL_CYCLES[i].lowDate);
+    if (date >= cycleLow) {
+      cycleIdx = i;
+      break;
+    }
   }
 
-  // Add variability based on specific day patterns
-  // Risk tends to peak around 400-550 days post-halving historically
-  const peakRiskDays = 480;
-  const daysDiff = Math.abs(daysSH - peakRiskDays);
-  const peakProximity = Math.max(0, 1 - daysDiff / 365);
-  baseScore = baseScore * 0.8 + peakProximity * 0.2;
+  const currentCycle = HISTORICAL_CYCLES[cycleIdx];
+  const cycleLowDate = new Date(currentCycle.lowDate);
+  const daysSinceLow = Math.max(0, Math.floor(
+    (date.getTime() - cycleLowDate.getTime()) / (1000 * 60 * 60 * 24)
+  ));
 
-  return Math.min(1, Math.max(0, baseScore));
+  // Days since/until halving for this cycle
+  const cycleHalvingDate = new Date(currentCycle.halvingDate);
+  const daysSH = Math.floor(
+    (date.getTime() - cycleHalvingDate.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  // Typical cycle from low to peak: ~1000-1200 days
+  const typicalLowToPeak = 1100;
+  const progressFromLow = Math.min(1.5, daysSinceLow / typicalLowToPeak);
+
+  // Progress from halving (can be negative if before halving)
+  const cycleLength = 1460;
+  const progressFromHalving = daysSH / cycleLength;
+
+  // Pre-halving risk: approaching halving with elevated progress from low
+  // This captures front-running behavior (e.g., 2024 ATH before halving)
+  let preHalvingRisk = 0;
+  if (daysSH < 0) {
+    const daysUntilHalving = -daysSH;
+
+    // Risk increases as we approach halving with meaningful progress
+    if (progressFromLow > 0.3 && daysUntilHalving < 180) {
+      const proximityFactor = 1 - daysUntilHalving / 180;
+      const progressFactor = (progressFromLow - 0.3) / 0.4;
+      preHalvingRisk = Math.min(0.35, proximityFactor * progressFactor * 0.35);
+    }
+
+    // Additional boost if progress is very high pre-halving
+    if (progressFromLow > 0.5) {
+      preHalvingRisk += Math.min(0.15, (progressFromLow - 0.5) * 0.3);
+    }
+  }
+
+  // Post-halving caution: first 180 days
+  let postHalvingCaution = 0;
+  if (daysSH >= 0 && daysSH < 180) {
+    postHalvingCaution = 0.30 * (1 - daysSH / 180);
+  }
+
+  // Peak risk window: 400-700 days post-halving
+  const peakRiskDays = 550;
+  const daysDiff = Math.abs(daysSH - peakRiskDays);
+  const peakWindowProximity = Math.max(0, 1 - daysDiff / 350);
+
+  // Combine factors
+  const baseScore =
+    progressFromLow * 0.35 +
+    Math.min(1, Math.max(0, progressFromHalving)) * 0.20 +
+    peakWindowProximity * 0.20 +
+    preHalvingRisk +
+    postHalvingCaution;
+
+  // Smooth with quadratic curve
+  const smoothed = baseScore < 0.5
+    ? 2 * baseScore * baseScore
+    : 1 - 2 * Math.pow(1 - baseScore, 2);
+
+  return Math.min(1, Math.max(0, smoothed));
+}
+
+/**
+ * Enhanced cycle score that also considers price position
+ * Use this when price data is available
+ */
+export function calculateEnhancedCycleScore(
+  date: Date,
+  price: number,
+  priceHistory: number[]
+): number {
+  // Get base time-based cycle score
+  const timeCycleScore = calculateCycleScore(date);
+
+  // Calculate price-based factors
+  const halvingIdx = getHalvingIndex(date);
+  const currentCycleIdx = Math.min(halvingIdx, HISTORICAL_CYCLES.length - 1);
+  const prevCycleIdx = Math.max(0, currentCycleIdx - 1);
+  const prevCycle = HISTORICAL_CYCLES[prevCycleIdx];
+
+  // Price relative to previous cycle high
+  const prevCycleHigh = prevCycle.high;
+  const priceVsPrevHigh = prevCycleHigh > 0 ? price / prevCycleHigh : 1;
+  const pricePositionScore = Math.min(1, priceVsPrevHigh);
+
+  // ATH proximity from price history
+  const currentATH = Math.max(...priceHistory);
+  const athProximity = currentATH > 0 ? price / currentATH : 1;
+
+  // Combine time and price factors
+  // Time: 50%, Price vs prev high: 25%, ATH proximity: 25%
+  const combined =
+    timeCycleScore * 0.50 +
+    pricePositionScore * 0.25 +
+    athProximity * 0.25;
+
+  return Math.min(1, Math.max(0, combined));
 }
 
 /**

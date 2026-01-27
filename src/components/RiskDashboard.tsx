@@ -28,6 +28,12 @@ interface UIDataPoint {
     macro: number;
     attention: number;
   };
+  macroComponents?: {
+    m2Signal: number;
+    fedFundsSignal: number;
+    yieldCurveSignal: number;
+    realRateSignal: number;
+  };
   cyclePhase: 'early' | 'mid' | 'late';
   isHalving: boolean;
 }
@@ -154,7 +160,9 @@ export default function RiskDashboard() {
   const [dataSource, setDataSource] = useState<string>('');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [showSmoothed, setShowSmoothed] = useState(true);
+  const [smoothingLevel, setSmoothingLevel] = useState(0); // 0 = no extra smoothing, higher = more
   const [showComponents, setShowComponents] = useState(false);
+  const [showMacroComponents, setShowMacroComponents] = useState(false);
   const [showHalvings, setShowHalvings] = useState(true);
   const [logScale, setLogScale] = useState(true);
   const [showHeatColors, setShowHeatColors] = useState(false);
@@ -346,15 +354,43 @@ export default function RiskDashboard() {
     return `$${price.toFixed(0)}`;
   };
 
+  // Apply extra smoothing if requested
+  const extraSmoothedData = useMemo(() => {
+    if (smoothingLevel === 0) return filteredData;
+
+    // EMA smoothing: lower alpha = more smoothing
+    // smoothingLevel 1 = alpha 0.2, level 2 = 0.1, level 3 = 0.05, level 4 = 0.02
+    const alphaMap: Record<number, number> = { 1: 0.2, 2: 0.1, 3: 0.05, 4: 0.02 };
+    const alpha = alphaMap[smoothingLevel] || 0.2;
+
+    const result: UIDataPoint[] = [];
+    let prevSmoothed = filteredData[0]?.smoothedRisk || 0.5;
+    let prevRaw = filteredData[0]?.risk || 0.5;
+
+    for (const d of filteredData) {
+      const newSmoothed = alpha * d.smoothedRisk + (1 - alpha) * prevSmoothed;
+      const newRaw = alpha * d.risk + (1 - alpha) * prevRaw;
+      result.push({
+        ...d,
+        smoothedRisk: newSmoothed,
+        risk: newRaw,
+      });
+      prevSmoothed = newSmoothed;
+      prevRaw = newRaw;
+    }
+
+    return result;
+  }, [filteredData, smoothingLevel]);
+
   // Add heat colors to data when enabled
   const chartData = useMemo(() => {
-    if (!showHeatColors) return filteredData;
+    if (!showHeatColors) return extraSmoothedData;
 
-    return filteredData.map(d => ({
+    return extraSmoothedData.map(d => ({
       ...d,
       heatColor: getRiskHeatColor(showSmoothed ? d.smoothedRisk : d.risk),
     }));
-  }, [filteredData, showHeatColors, showSmoothed]);
+  }, [extraSmoothedData, showHeatColors, showSmoothed]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -392,7 +428,7 @@ export default function RiskDashboard() {
     );
   }
 
-  const latestData = filteredData[filteredData.length - 1];
+  const latestData = extraSmoothedData[extraSmoothedData.length - 1];
   const riskLevel =
     latestData.risk < 0.2 ? 'Low' :
     latestData.risk < 0.4 ? 'Moderate-Low' :
@@ -490,6 +526,23 @@ export default function RiskDashboard() {
             />
             <span className="text-sm text-gray-400">Smoothed</span>
           </label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">EMA:</span>
+            <input
+              type="range"
+              min="0"
+              max="4"
+              value={smoothingLevel}
+              onChange={e => setSmoothingLevel(parseInt(e.target.value))}
+              className="w-20 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+            />
+            <span className="text-xs text-gray-400 w-12">
+              {smoothingLevel === 0 ? 'Off' :
+               smoothingLevel === 1 ? '~5d' :
+               smoothingLevel === 2 ? '~10d' :
+               smoothingLevel === 3 ? '~20d' : '~50d'}
+            </span>
+          </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -507,6 +560,15 @@ export default function RiskDashboard() {
               className="rounded bg-gray-700 border-gray-600"
             />
             <span className="text-sm text-gray-400">Components</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showMacroComponents}
+              onChange={e => setShowMacroComponents(e.target.checked)}
+              className="rounded bg-gray-700 border-gray-600"
+            />
+            <span className="text-sm text-gray-400">Macro Details</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -875,6 +937,169 @@ export default function RiskDashboard() {
               <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
               <span className="text-gray-400">Attention</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Macro Components Chart */}
+      {showMacroComponents && (
+        <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
+          <h3 className="text-white font-medium mb-4">Macro Indicators (0% = Bearish, 100% = Bullish)</h3>
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={filteredData}
+                margin={{ top: 10, right: 20, left: 20, bottom: 10 }}
+              >
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={formatDate}
+                  stroke="#6b7280"
+                  tick={{ fill: '#9ca3af', fontSize: 10 }}
+                  interval={Math.max(0, Math.floor(filteredData.length / 8) - 1)}
+                />
+                <YAxis
+                  domain={[0, 1]}
+                  tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+                  stroke="#6b7280"
+                  tick={{ fill: '#9ca3af', fontSize: 10 }}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const point = payload[0].payload as UIDataPoint;
+                    if (!point.macroComponents) return null;
+                    return (
+                      <div className="rounded-lg border border-gray-700 bg-gray-900 p-3 shadow-lg min-w-[180px]">
+                        <p className="font-medium text-white mb-2 text-sm">
+                          {new Date(point.date).toLocaleDateString()}
+                        </p>
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-sm">
+                            <span style={{ color: '#10b981' }}>M2 YoY:</span>
+                            <span className="text-white">
+                              {(point.macroComponents.m2Signal * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span style={{ color: '#f59e0b' }}>Fed Funds:</span>
+                            <span className="text-white">
+                              {(point.macroComponents.fedFundsSignal * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span style={{ color: '#8b5cf6' }}>Yield Curve:</span>
+                            <span className="text-white">
+                              {(point.macroComponents.yieldCurveSignal * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span style={{ color: '#ec4899' }}>Real Rate:</span>
+                            <span className="text-white">
+                              {(point.macroComponents.realRateSignal * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-sm border-t border-gray-700 pt-1 mt-1">
+                            <span style={{ color: '#06b6d4' }}>Combined:</span>
+                            <span className="text-white font-medium">
+                              {(point.components.macro * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+
+                <Line
+                  type="monotone"
+                  dataKey="macroComponents.m2Signal"
+                  stroke="#10b981"
+                  strokeWidth={1.5}
+                  dot={false}
+                  name="M2 YoY"
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="macroComponents.fedFundsSignal"
+                  stroke="#f59e0b"
+                  strokeWidth={1.5}
+                  dot={false}
+                  name="Fed Funds"
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="macroComponents.yieldCurveSignal"
+                  stroke="#8b5cf6"
+                  strokeWidth={1.5}
+                  dot={false}
+                  name="Yield Curve"
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="macroComponents.realRateSignal"
+                  stroke="#ec4899"
+                  strokeWidth={1.5}
+                  dot={false}
+                  name="Real Rate"
+                  isAnimationActive={false}
+                  connectNulls
+                />
+
+                {/* Combined macro score as reference */}
+                <Line
+                  type="monotone"
+                  dataKey="components.macro"
+                  stroke="#06b6d4"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  dot={false}
+                  name="Combined Macro"
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Legend */}
+          <div className="flex flex-wrap gap-4 mt-4 justify-center text-sm">
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#10b981' }}></div>
+              <span className="text-gray-400">M2 YoY (Money Supply)</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#f59e0b' }}></div>
+              <span className="text-gray-400">Fed Funds Rate</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }}></div>
+              <span className="text-gray-400">Yield Curve (10Y-2Y)</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#ec4899' }}></div>
+              <span className="text-gray-400">Real Rate (TIPS)</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-8 h-0.5" style={{ backgroundColor: '#06b6d4', borderStyle: 'dashed' }}></div>
+              <span className="text-gray-400">Combined (15% weight)</span>
+            </div>
+          </div>
+
+          {/* Explanation */}
+          <div className="mt-4 p-3 bg-gray-800/50 rounded-lg text-xs text-gray-400">
+            <p className="mb-2"><strong className="text-white">Interpretation:</strong></p>
+            <ul className="list-disc list-inside space-y-1">
+              <li><strong className="text-emerald-400">M2 YoY:</strong> Higher = money supply growing = bullish for BTC</li>
+              <li><strong className="text-amber-400">Fed Funds:</strong> Lower rates = bullish for risk assets</li>
+              <li><strong className="text-violet-400">Yield Curve:</strong> Normal curve (positive) = bullish, inverted = bearish</li>
+              <li><strong className="text-pink-400">Real Rate:</strong> Negative real rates = bullish for hard assets</li>
+            </ul>
           </div>
         </div>
       )}
