@@ -305,18 +305,11 @@ export default function RiskDashboard() {
       result = result.filter(d => new Date(d.date) >= startDate);
     }
 
-    // Apply risk level filter
-    if (riskFilter.enabled) {
-      const minRisk = riskFilter.min / 100;
-      const maxRisk = riskFilter.max / 100;
-      result = result.filter(d => {
-        const riskValue = showSmoothed ? d.smoothedRisk : d.risk;
-        return riskValue >= minRisk && riskValue <= maxRisk;
-      });
-    }
+    // Note: risk level filter is NOT applied here - it's applied as null masking
+    // in chartData so the price line and time axis stay intact
 
     return result;
-  }, [data, timeRange, zoomStart, zoomEnd, riskFilter, showSmoothed]);
+  }, [data, timeRange, zoomStart, zoomEnd]);
 
   // Zoom handlers
   const handleMouseDown = (e: { activeLabel?: string | number }) => {
@@ -390,15 +383,33 @@ export default function RiskDashboard() {
     return result;
   }, [filteredData, smoothingLevel]);
 
-  // Add heat colors to data when enabled
+  // Build chart data: apply risk filter as null-masking + heat colors
+  // This keeps the price line and time axis intact while hiding risk segments
   const chartData = useMemo(() => {
-    if (!showHeatColors) return extraSmoothedData;
+    return extraSmoothedData.map(d => {
+      const riskValue = showSmoothed ? d.smoothedRisk : d.risk;
 
-    return extraSmoothedData.map(d => ({
-      ...d,
-      heatColor: getRiskHeatColor(showSmoothed ? d.smoothedRisk : d.risk),
-    }));
-  }, [extraSmoothedData, showHeatColors, showSmoothed]);
+      // If risk filter is active, null out risk values outside the range
+      let maskedRisk: number | null = d.risk;
+      let maskedSmoothedRisk: number | null = d.smoothedRisk;
+
+      if (riskFilter.enabled) {
+        const minRisk = riskFilter.min / 100;
+        const maxRisk = riskFilter.max / 100;
+        if (riskValue < minRisk || riskValue > maxRisk) {
+          maskedRisk = null;
+          maskedSmoothedRisk = null;
+        }
+      }
+
+      return {
+        ...d,
+        filteredRisk: maskedRisk,
+        filteredSmoothedRisk: maskedSmoothedRisk,
+        ...(showHeatColors ? { heatColor: getRiskHeatColor(riskValue) } : {}),
+      };
+    });
+  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -462,7 +473,8 @@ export default function RiskDashboard() {
     );
   }
 
-  const latestData = extraSmoothedData[extraSmoothedData.length - 1];
+  // Use full unfiltered data for the Today card so it always shows current values
+  const latestData = data[data.length - 1];
   const riskLevel =
     latestData.risk < 0.2 ? 'Low' :
     latestData.risk < 0.4 ? 'Moderate-Low' :
@@ -478,8 +490,8 @@ export default function RiskDashboard() {
     latestData.risk < 0.88 ? { text: 'High Risk', emoji: '🔴', desc: 'Reduce exposure, take profits' } :
     { text: 'Extreme Risk', emoji: '🔴', desc: 'Historically near cycle top' };
 
-  // 7-day change
-  const prev7d = extraSmoothedData.length >= 8 ? extraSmoothedData[extraSmoothedData.length - 8] : null;
+  // 7-day change (always from full unfiltered data)
+  const prev7d = data.length >= 8 ? data[data.length - 8] : null;
   const riskChange7d = prev7d ? latestData.risk - prev7d.risk : 0;
   const priceChange7d = prev7d && prev7d.price > 0 ? (latestData.price - prev7d.price) / prev7d.price : 0;
 
@@ -805,7 +817,7 @@ export default function RiskDashboard() {
 
         {riskFilter.enabled && (
           <span className="text-sm text-gray-400 ml-auto">
-            Showing {filteredData.length} days in {riskFilter.min}-{riskFilter.max}% range
+            Highlighting {chartData.filter(d => d.filteredRisk !== null).length} days in {riskFilter.min}-{riskFilter.max}% risk range
           </span>
         )}
       </div>
@@ -892,30 +904,33 @@ export default function RiskDashboard() {
                 isAnimationActive={false}
               />
 
-              {/* Risk area - hidden when heat map enabled */}
+              {/* Risk area - uses filtered keys so segments outside filter are hidden */}
               {!showHeatColors && (
                 <Area
                   yAxisId="risk"
                   type="monotone"
-                  dataKey={showSmoothed ? 'smoothedRisk' : 'risk'}
+                  dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
                   stroke="none"
                   fill="url(#riskGradient)"
                   fillOpacity={0.4}
                   isAnimationActive={false}
+                  connectNulls={false}
                 />
               )}
 
-              {/* Risk line - normal red or heat colored dots */}
+              {/* Risk line - uses filtered keys; null values create gaps */}
               <Line
                 yAxisId="risk"
                 type="monotone"
-                dataKey={showSmoothed ? 'smoothedRisk' : 'risk'}
+                dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
                 stroke={showHeatColors ? 'transparent' : '#dc2626'}
                 strokeWidth={1.5}
+                connectNulls={false}
                 dot={showHeatColors ? (props) => {
-                  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint };
+                  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint & { filteredRisk: number | null; filteredSmoothedRisk: number | null } };
                   if (cx === undefined || cy === undefined || !payload) return null;
-                  const risk = showSmoothed ? payload.smoothedRisk : payload.risk;
+                  const risk = showSmoothed ? payload.filteredSmoothedRisk : payload.filteredRisk;
+                  if (risk === null) return null;
                   return (
                     <circle
                       key={`dot-${cx}-${cy}`}
