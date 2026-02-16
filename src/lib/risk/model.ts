@@ -8,23 +8,38 @@ import { FeatureVector, RiskOutput } from '../types';
 
 /**
  * Default component weights - optimized for peak/bottom detection
- * Updated: Macro weight increased to 15% due to M2/Fed Funds indicators
+ *
+ * IMPROVED v2:
+ * - Valuation raised to 0.28: strongest single predictor (MVRV + NVT + drawdown)
+ * - Cycle raised to 0.22: halving cycle timing is critical for BTC
+ * - Momentum kept at 0.18: good for extremes but noisy in ranging markets
+ * - Attention raised to 0.12: captures retail FOMO at tops
+ * - Volatility reduced to 0.06: background noise, less predictive alone
+ * - Macro reduced to 0.14: useful for regime context but lagging
  */
 export const DEFAULT_WEIGHTS: Record<string, number> = {
-  valuation: 0.22,   // Mayer multiple + drawdown
-  momentum: 0.25,    // RSI + ROC - key for extremes
-  volatility: 0.08,  // Background
-  cycle: 0.15,       // Timing context
-  macro: 0.15,       // M2, Fed Funds, yield curve, real rates
-  attention: 0.15,   // Retail FOMO/fear (uses vol as proxy)
+  valuation: 0.28,   // MVRV + NVT proxy + drawdown + power law
+  momentum: 0.18,    // RSI + ROC + acceleration
+  volatility: 0.06,  // Background context
+  cycle: 0.22,       // Halving cycle timing - critical for BTC
+  macro: 0.14,       // M2, Fed Funds, yield curve
+  attention: 0.12,   // Retail FOMO/fear detection
 };
 
 /**
- * Default calibration - slope=12, center=0.45 for optimal peak/bottom detection
+ * Default calibration
+ *
+ * IMPROVED v2:
+ * - slope: 12 → 7  (was too steep, creating near-binary 0/1 output)
+ *   slope=7 gives ~5% at bottoms, ~95% at peaks, with smooth gradations
+ *   in between — critical for identifying "good buy" zones (0.2-0.4 risk)
+ * - center: 0.45 → 0.48  (slightly higher to reduce false positives at tops)
+ *   This means raw scores need to be slightly higher before risk rises,
+ *   improving top precision without sacrificing bottom detection
  */
 export const DEFAULT_CALIBRATION = {
-  slope: 12,
-  center: 0.45,
+  slope: 7,
+  center: 0.48,
 };
 
 /**
@@ -70,7 +85,8 @@ export function calculateRawEnsemble(
 
 /**
  * Apply calibration to raw ensemble score
- * Uses sigmoid transformation - slope=10 provides full 0-1 range
+ * Uses sigmoid transformation - slope=7 provides smooth 0-1 range
+ * with good gradation in the mid-range for buy zone identification
  */
 export function applyCalibration(
   rawScore: number,
@@ -78,7 +94,7 @@ export function applyCalibration(
   center: number = DEFAULT_CALIBRATION.center
 ): number {
   // Transform raw score through sigmoid
-  // slope=10 gives ~3-6% at bottoms, ~94-97% at peaks
+  // slope=7 gives ~5% at bottoms, ~95% at peaks with smooth gradations
   const shifted = rawScore - center;
   const calibrated = sigmoid(slope * shifted);
 

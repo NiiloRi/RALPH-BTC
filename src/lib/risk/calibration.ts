@@ -94,13 +94,15 @@ export function optimizeWeights(
   let bestCorr = -1;
 
   // For efficiency, we'll try some predefined weight configurations
+  // Updated: valuation and cycle are the strongest predictors for BTC
   const weightConfigs = [
-    { valuation: 0.3, momentum: 0.15, volatility: 0.15, cycle: 0.2, macro: 0.1, attention: 0.1 },
-    { valuation: 0.25, momentum: 0.15, volatility: 0.15, cycle: 0.25, macro: 0.1, attention: 0.1 },
-    { valuation: 0.25, momentum: 0.2, volatility: 0.15, cycle: 0.2, macro: 0.1, attention: 0.1 },
-    { valuation: 0.2, momentum: 0.15, volatility: 0.2, cycle: 0.25, macro: 0.1, attention: 0.1 },
-    { valuation: 0.25, momentum: 0.15, volatility: 0.1, cycle: 0.25, macro: 0.1, attention: 0.15 },
-    { valuation: 0.3, momentum: 0.1, volatility: 0.15, cycle: 0.25, macro: 0.05, attention: 0.15 },
+    { valuation: 0.28, momentum: 0.18, volatility: 0.06, cycle: 0.22, macro: 0.14, attention: 0.12 }, // v2 default
+    { valuation: 0.30, momentum: 0.15, volatility: 0.05, cycle: 0.25, macro: 0.10, attention: 0.15 },
+    { valuation: 0.25, momentum: 0.20, volatility: 0.05, cycle: 0.25, macro: 0.10, attention: 0.15 },
+    { valuation: 0.30, momentum: 0.15, volatility: 0.08, cycle: 0.22, macro: 0.12, attention: 0.13 },
+    { valuation: 0.25, momentum: 0.18, volatility: 0.07, cycle: 0.20, macro: 0.15, attention: 0.15 },
+    { valuation: 0.28, momentum: 0.15, volatility: 0.07, cycle: 0.25, macro: 0.12, attention: 0.13 },
+    { valuation: 0.32, momentum: 0.15, volatility: 0.05, cycle: 0.23, macro: 0.10, attention: 0.15 },
     DEFAULT_WEIGHTS,
   ];
 
@@ -108,7 +110,7 @@ export function optimizeWeights(
     // Calculate risk with these weights
     const riskOutputs = features.map(f => {
       const raw = calculateRawEnsemble(f, weights);
-      const calibrated = applyCalibration(raw, 4, 0.5);
+      const calibrated = applyCalibration(raw, 7, 0.48);
       return {
         date: f.date,
         price: f.price,
@@ -147,12 +149,13 @@ export function optimizeCalibration(
   weights: Record<string, number>,
   horizon: number = 90
 ): { slope: number; center: number } {
-  let bestParams = { slope: 4, center: 0.5 };
+  let bestParams = { slope: 7, center: 0.48 };
   let bestCorr = -1;
 
   // Grid search over slope and center
-  for (let slope = 2; slope <= 8; slope += 1) {
-    for (let center = 0.4; center <= 0.6; center += 0.05) {
+  // Range 4-10 covers soft to moderate sigmoid curves
+  for (let slope = 4; slope <= 10; slope += 1) {
+    for (let center = 0.40; center <= 0.55; center += 0.025) {
       const riskOutputs = features.map(f => {
         const raw = calculateRawEnsemble(f, weights);
         const calibrated = applyCalibration(raw, slope, center);

@@ -14,6 +14,8 @@ import {
   ReferenceArea,
 } from 'recharts';
 import { HALVING_DATES } from '@/lib/types';
+import MetaLayersPanel from './MetaLayersPanel';
+import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
 
 interface UIDataPoint {
   date: string;
@@ -171,6 +173,7 @@ export default function RiskDashboard() {
     max: 100,
     enabled: false,
   });
+  const [showMetaLayers, setShowMetaLayers] = useState(false);
 
   // Zoom state
   const [zoomStart, setZoomStart] = useState<number | null>(null);
@@ -185,10 +188,15 @@ export default function RiskDashboard() {
       setError(null);
 
       try {
-        // First, try to fetch fresh data from API (Binance)
+        // First, try to fetch fresh data from API (Binance) with 15s timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
         const apiResponse = await fetch('/api/risk-data', {
-          cache: 'no-store', // Always fetch fresh data
+          cache: 'no-store',
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (apiResponse.ok) {
           const apiData = await apiResponse.json();
@@ -403,6 +411,32 @@ export default function RiskDashboard() {
       .map(h => h.toISOString().split('T')[0]);
   }, [filteredData, showHalvings]);
 
+  // Calculate meta-layers for the latest data point
+  const currentMetaLayers = useMemo((): MetaLayersOutput | undefined => {
+    if (extraSmoothedData.length < 30) return undefined;
+
+    const latestPoint = extraSmoothedData[extraSmoothedData.length - 1];
+
+    // Build RiskOutput-like objects from UI data for simplified calculation
+    const recentRisks = extraSmoothedData.slice(-60).map(d => ({
+      date: d.date,
+      price: d.price,
+      risk: d.risk,
+      smoothedRisk: d.smoothedRisk,
+      components: d.components,
+    }));
+
+    try {
+      const meta = calculateSimplifiedMetaLayers(
+        recentRisks[recentRisks.length - 1],
+        recentRisks
+      );
+      return meta as MetaLayersOutput;
+    } catch {
+      return undefined;
+    }
+  }, [extraSmoothedData]);
+
   // Risk color gradient
   const getRiskColor = (risk: number) => {
     if (risk < 0.2) return '#22c55e';
@@ -435,6 +469,20 @@ export default function RiskDashboard() {
     latestData.risk < 0.6 ? 'Neutral' :
     latestData.risk < 0.8 ? 'Moderate-High' : 'High';
 
+  const riskSignal =
+    latestData.risk < 0.15 ? { text: 'Strong Buy Zone', emoji: '🟢', desc: 'Historically excellent accumulation area' } :
+    latestData.risk < 0.30 ? { text: 'Buy Zone', emoji: '🟢', desc: 'Good DCA opportunity, low risk' } :
+    latestData.risk < 0.45 ? { text: 'Moderate Buy', emoji: '🟡', desc: 'Acceptable entry, normal conditions' } :
+    latestData.risk < 0.60 ? { text: 'Hold / Neutral', emoji: '🟡', desc: 'No strong signal, stay patient' } :
+    latestData.risk < 0.75 ? { text: 'Caution', emoji: '🟠', desc: 'Consider taking partial profits' } :
+    latestData.risk < 0.88 ? { text: 'High Risk', emoji: '🔴', desc: 'Reduce exposure, take profits' } :
+    { text: 'Extreme Risk', emoji: '🔴', desc: 'Historically near cycle top' };
+
+  // 7-day change
+  const prev7d = extraSmoothedData.length >= 8 ? extraSmoothedData[extraSmoothedData.length - 8] : null;
+  const riskChange7d = prev7d ? latestData.risk - prev7d.risk : 0;
+  const priceChange7d = prev7d && prev7d.price > 0 ? (latestData.price - prev7d.price) / prev7d.price : 0;
+
   const timeRangeButtons: { label: string; value: TimeRange }[] = [
     { label: 'YTD', value: 'ytd' },
     { label: '1Y', value: '1y' },
@@ -446,41 +494,126 @@ export default function RiskDashboard() {
 
   return (
     <div className="w-full space-y-6">
-      {/* Stats Bar */}
-      <div className="flex flex-wrap gap-4 items-center text-sm">
-        <div className="bg-gray-800 rounded-lg px-4 py-2">
-          <span className="text-gray-400">Date: </span>
-          <span className="text-white font-medium">{latestData.date}</span>
-        </div>
-        <div className="bg-gray-800 rounded-lg px-4 py-2">
-          <span className="text-gray-400">Price: </span>
-          <span className="text-white font-medium">
-            ${latestData.price.toLocaleString()}
-          </span>
-        </div>
-        <div className="bg-gray-800 rounded-lg px-4 py-2">
-          <span className="text-gray-400">Risk: </span>
-          <span
-            style={{ color: getRiskColor(latestData.risk) }}
-            className="font-medium"
-          >
-            {(latestData.risk * 100).toFixed(1)}% ({riskLevel})
-          </span>
-        </div>
-        <div className="bg-gray-800 rounded-lg px-4 py-2">
-          <span className="text-gray-400">Phase: </span>
-          <span className="text-white capitalize">{latestData.cyclePhase}</span>
-        </div>
-        {dataSource && (
-          <div className="bg-green-900/30 rounded-lg px-4 py-2 ml-auto">
-            <span className="text-green-400 font-medium">{dataSource}</span>
-            {lastUpdated && (
-              <span className="text-gray-400 ml-2 text-xs">
-                {new Date(lastUpdated).toLocaleTimeString()}
-              </span>
+      {/* Today's Risk Card */}
+      <div className="rounded-xl border border-gray-700 bg-gradient-to-br from-gray-900 via-gray-850 to-gray-900 p-6 shadow-xl">
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* Left: Main risk gauge */}
+          <div className="flex-shrink-0 flex flex-col items-center justify-center min-w-[200px]">
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+              {new Date(latestData.date).toLocaleDateString('fi-FI', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            </div>
+            <div className="relative w-36 h-36 flex items-center justify-center">
+              {/* Circular risk gauge background */}
+              <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="#1f2937" strokeWidth="10" />
+                <circle
+                  cx="60" cy="60" r="52"
+                  fill="none"
+                  stroke={getRiskColor(latestData.risk)}
+                  strokeWidth="10"
+                  strokeDasharray={`${latestData.risk * 327} 327`}
+                  strokeLinecap="round"
+                  className="transition-all duration-1000"
+                />
+              </svg>
+              <div className="text-center z-10">
+                <div className="text-3xl font-bold" style={{ color: getRiskColor(latestData.risk) }}>
+                  {(latestData.risk * 100).toFixed(1)}%
+                </div>
+                <div className="text-xs text-gray-400 mt-0.5">{riskLevel}</div>
+              </div>
+            </div>
+            <div className="mt-2 text-center">
+              <span className="text-lg">{riskSignal.emoji}</span>
+              <span className="ml-1 font-semibold text-white text-sm">{riskSignal.text}</span>
+            </div>
+            <div className="text-xs text-gray-500 mt-0.5 text-center max-w-[200px]">{riskSignal.desc}</div>
+          </div>
+
+          {/* Middle: Price & changes */}
+          <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">BTC Price</div>
+              <div className="text-xl font-bold text-white">${latestData.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              {prev7d && (
+                <div className={`text-xs mt-1 ${priceChange7d >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {priceChange7d >= 0 ? '+' : ''}{(priceChange7d * 100).toFixed(1)}% (7d)
+                </div>
+              )}
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Risk Trend (7d)</div>
+              <div className="text-xl font-bold" style={{ color: getRiskColor(latestData.risk) }}>
+                {riskChange7d >= 0 ? '+' : ''}{(riskChange7d * 100).toFixed(1)}%
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {riskChange7d > 0.02 ? 'Rising' : riskChange7d < -0.02 ? 'Falling' : 'Stable'}
+              </div>
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Cycle Phase</div>
+              <div className="text-xl font-bold text-white capitalize">{latestData.cyclePhase}</div>
+              <div className="text-xs text-gray-500 mt-1">Post-halving</div>
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Valuation</div>
+              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.valuation) }}>
+                {(latestData.components.valuation * 100).toFixed(0)}%
+              </div>
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Momentum</div>
+              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.momentum) }}>
+                {(latestData.components.momentum * 100).toFixed(0)}%
+              </div>
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Cycle</div>
+              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.cycle) }}>
+                {(latestData.components.cycle * 100).toFixed(0)}%
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Component breakdown bars */}
+          <div className="flex-shrink-0 min-w-[220px]">
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Component Breakdown</div>
+            <div className="space-y-2">
+              {[
+                { label: 'Valuation', value: latestData.components.valuation, weight: 28, color: '#3b82f6' },
+                { label: 'Cycle', value: latestData.components.cycle, weight: 22, color: '#a855f7' },
+                { label: 'Momentum', value: latestData.components.momentum, weight: 18, color: '#22c55e' },
+                { label: 'Macro', value: latestData.components.macro, weight: 14, color: '#06b6d4' },
+                { label: 'Attention', value: latestData.components.attention, weight: 12, color: '#eab308' },
+                { label: 'Volatility', value: latestData.components.volatility, weight: 6, color: '#f97316' },
+              ].map(comp => (
+                <div key={comp.label} className="flex items-center gap-2">
+                  <div className="text-xs text-gray-400 w-16 text-right">{comp.label}</div>
+                  <div className="flex-1 bg-gray-800 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${comp.value * 100}%`, backgroundColor: comp.color }}
+                    />
+                  </div>
+                  <div className="text-xs font-mono w-10 text-right" style={{ color: comp.color }}>
+                    {(comp.value * 100).toFixed(0)}%
+                  </div>
+                </div>
+              ))}
+            </div>
+            {dataSource && (
+              <div className="mt-3 text-xs text-gray-600 flex items-center gap-1">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                {dataSource}
+                {lastUpdated && (
+                  <span className="text-gray-600 ml-1">
+                    {new Date(lastUpdated).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
             )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Controls */}
@@ -1103,6 +1236,13 @@ export default function RiskDashboard() {
           </div>
         </div>
       )}
+
+      {/* Meta-Layers Panel */}
+      <MetaLayersPanel
+        meta={currentMetaLayers}
+        isExpanded={showMetaLayers}
+        onToggle={() => setShowMetaLayers(!showMetaLayers)}
+      />
 
       {/* Risk Legend */}
       <div className="grid grid-cols-5 gap-2">

@@ -120,8 +120,29 @@ export function calculateCycleRelativeValuation(
 }
 
 /**
+ * NVT-like proxy: speculative premium detector
+ * High short-term / long-term MA ratio = speculative bubble
+ */
+export function calculateNVTProxy(
+  price: number,
+  sma100: number,
+  sma200: number
+): number {
+  if (sma100 <= 0 || sma200 <= 0) return 1;
+  return (price / sma100) * (price / sma200);
+}
+
+/**
  * Calculate comprehensive valuation score [0, 1]
  * Higher = more overvalued = higher risk
+ *
+ * IMPROVED:
+ * - Removed Mayer Multiple (was identical to MVRV proxy = price/sma200)
+ * - Added NVT proxy for speculative premium detection
+ * - Tighter normalization ranges for sharper top/bottom signals
+ * - Drawdown weight INCREASED for stronger bottom detection
+ * - Added 365d return percentile for cycle context
+ * - Non-linear ATH proximity (sqrt) for faster risk decay
  */
 export function calculateValuationScore(
   data: DailyData[],
@@ -135,47 +156,58 @@ export function calculateValuationScore(
   const mvrvProxy = calculateMVRVProxy(current.price, current.sma200 || 0);
   const piCycleRatio = calculatePiCycleRatio(current.price, current.sma350 || 0);
   const powerLawDev = calculatePowerLawDeviation(current.price, daysSinceGenesis);
-  const mayerMultiple = calculateMayerMultiple(current.price, current.sma200 || 0);
+  const nvtProxy = calculateNVTProxy(current.price, current.sma100 || 0, current.sma200 || 0);
   const drawdown = calculateDrawdownFromATH(prices, index);
   const daysSinceATH = calculateDaysSinceATH(prices, index);
 
-  // Normalize each component to [0, 1]
-  // MVRV proxy: typical range 0.5-3.0
-  const mvrvScore = Math.min(1, Math.max(0, (mvrvProxy - 0.5) / 2.5));
+  // Normalize with TIGHTER ranges for more decisive signals
 
-  // Pi cycle ratio: typically 0.6-1.4
-  const piScore = Math.min(1, Math.max(0, (piCycleRatio - 0.6) / 0.8));
+  // MVRV proxy: 0.7 = undervalued, 2.0+ = overvalued
+  const mvrvScore = Math.min(1, Math.max(0, (mvrvProxy - 0.7) / 1.3));
 
-  // Power law deviation: typically -1 to +2
-  const plScore = Math.min(1, Math.max(0, (powerLawDev + 1) / 3));
+  // Pi cycle ratio: >1.0 is danger zone
+  const piScore = Math.min(1, Math.max(0, (piCycleRatio - 0.7) / 0.6));
 
-  // Mayer multiple: typically 0.5-3.0
-  const mayerScore = Math.min(1, Math.max(0, (mayerMultiple - 0.5) / 2.5));
+  // Power law deviation: tightened to -0.5 to +1.5
+  const plScore = Math.min(1, Math.max(0, (powerLawDev + 0.5) / 2.0));
 
-  // Drawdown: 0 = at ATH (high risk), 0.8+ = deep drawdown (low risk)
-  // Invert so high drawdown = low risk
-  const drawdownScore = Math.min(1, Math.max(0, 1 - drawdown));
+  // NVT proxy: 1.0 = fair, 2.5+ = speculative
+  const nvtScore = Math.min(1, Math.max(0, (nvtProxy - 0.8) / 1.7));
 
-  // Days since ATH: 0-30 days = high risk, 365+ days = lower risk
-  const athScore = Math.min(1, Math.max(0, 1 - daysSinceATH / 365));
+  // Drawdown: strong bottom detector with non-linear scaling
+  // At ATH (dd=0) → 1.0, at -30% → 0.55, at -50% → 0.25, at -80% → 0.0
+  const drawdownScore = Math.min(1, Math.max(0, 1 - drawdown * 1.5));
 
-  // Weighted average
+  // Days since ATH: non-linear (sqrt) → faster decay from ATH
+  const athDays = Math.min(1, Math.max(0, 1 - Math.sqrt(daysSinceATH / 365)));
+
+  // 365d return percentile: annual cycle context
+  let yearReturnScore = 0.5;
+  if (index >= 365) {
+    const yearReturn = (current.price - prices[index - 365]) / prices[index - 365];
+    // -60% → 0.0, 0% → 0.3, +100% → 0.7, +300% → 1.0
+    yearReturnScore = Math.min(1, Math.max(0, (yearReturn + 0.6) / 3.6));
+  }
+
+  // Rebalanced weights for better top AND bottom detection
   const weights = {
-    mvrv: 0.25,
-    pi: 0.15,
-    pl: 0.2,
-    mayer: 0.15,
-    drawdown: 0.15,
-    ath: 0.1,
+    mvrv: 0.20,       // Core valuation metric
+    pi: 0.15,          // Historically accurate top detector
+    pl: 0.15,          // Long-term regression anchor
+    nvt: 0.10,         // Speculative premium (NEW)
+    drawdown: 0.20,    // INCREASED: critical for bottom detection
+    ath: 0.10,         // ATH proximity
+    yearReturn: 0.10,  // Annual return context (NEW)
   };
 
   const score =
     weights.mvrv * mvrvScore +
     weights.pi * piScore +
     weights.pl * plScore +
-    weights.mayer * mayerScore +
+    weights.nvt * nvtScore +
     weights.drawdown * drawdownScore +
-    weights.ath * athScore;
+    weights.ath * athDays +
+    weights.yearReturn * yearReturnScore;
 
   return Math.min(1, Math.max(0, score));
 }

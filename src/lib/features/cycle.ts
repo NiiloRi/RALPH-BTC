@@ -199,13 +199,14 @@ export const HISTORICAL_CYCLES: CycleData[] = [
     high: 69000,
     highDate: '2021-11-10',
   },
-  // Cycle 4: Fourth halving (current)
+  // Cycle 4: Fourth halving (current, cycle still in progress)
+  // NOTE: high is rolling ATH, updated as cycle progresses
   {
     halvingDate: '2024-04-20',
     low: 15500,
     lowDate: '2022-11-21',
-    high: 73800,
-    highDate: '2024-03-14',
+    high: 109000,
+    highDate: '2025-01-20',
   },
 ];
 
@@ -251,10 +252,13 @@ export function getCycleRelativePrice(price: number, date: Date): number {
  * Calculate comprehensive cycle score [0, 1]
  * Higher = later in cycle = potentially higher risk
  *
- * IMPROVED: Does NOT reset sharply at halving
+ * IMPROVED v2:
  * - Uses time from cycle LOW, not halving
- * - Accounts for front-running (ATH before halving)
- * - Post-halving corrections are expected, not instant safety
+ * - WIDER peak window (300-750 days post-halving) to catch both early and late peaks
+ * - Stronger pre-halving risk ramp for front-running detection
+ * - Post-halving caution reduced (history shows post-halving is bullish)
+ * - Added "euphoria zone" detection: >800 days from low = extreme risk
+ * - Smoother transition between phases
  */
 export function calculateCycleScore(date: Date): number {
   // Find cycle based on which LOW we're after (not halving)
@@ -287,48 +291,67 @@ export function calculateCycleScore(date: Date): number {
   const cycleLength = 1460;
   const progressFromHalving = daysSH / cycleLength;
 
-  // Pre-halving risk: approaching halving with elevated progress from low
-  // This captures front-running behavior (e.g., 2024 ATH before halving)
+  // === BOTTOM ZONE: first 180 days from low = strong accumulation ===
+  let bottomZoneDiscount = 0;
+  if (daysSinceLow < 180) {
+    // Quickly decaying discount: day 0 = -0.3, day 180 = 0
+    bottomZoneDiscount = -0.3 * (1 - daysSinceLow / 180);
+  }
+
+  // === PRE-HALVING RISK: stronger front-running detection ===
   let preHalvingRisk = 0;
   if (daysSH < 0) {
     const daysUntilHalving = -daysSH;
 
-    // Risk increases as we approach halving with meaningful progress
-    if (progressFromLow > 0.3 && daysUntilHalving < 180) {
-      const proximityFactor = 1 - daysUntilHalving / 180;
-      const progressFactor = (progressFromLow - 0.3) / 0.4;
-      preHalvingRisk = Math.min(0.35, proximityFactor * progressFactor * 0.35);
+    // Risk ramp: 270 days before halving with meaningful progress
+    if (progressFromLow > 0.25 && daysUntilHalving < 270) {
+      const proximityFactor = 1 - daysUntilHalving / 270;
+      const progressFactor = Math.min(1, (progressFromLow - 0.25) / 0.35);
+      preHalvingRisk = Math.min(0.40, proximityFactor * progressFactor * 0.40);
     }
 
-    // Additional boost if progress is very high pre-halving
+    // Extra boost for very extended pre-halving rallies
     if (progressFromLow > 0.5) {
       preHalvingRisk += Math.min(0.15, (progressFromLow - 0.5) * 0.3);
     }
   }
 
-  // Post-halving caution: first 180 days
+  // === POST-HALVING: reduced caution (historically bullish period) ===
   let postHalvingCaution = 0;
-  if (daysSH >= 0 && daysSH < 180) {
-    postHalvingCaution = 0.30 * (1 - daysSH / 180);
+  if (daysSH >= 0 && daysSH < 90) {
+    // Only 90 days of caution (was 180), weaker floor
+    postHalvingCaution = 0.15 * (1 - daysSH / 90);
   }
 
-  // Peak risk window: 400-700 days post-halving
-  const peakRiskDays = 550;
-  const daysDiff = Math.abs(daysSH - peakRiskDays);
-  const peakWindowProximity = Math.max(0, 1 - daysDiff / 350);
+  // === PEAK RISK WINDOW: WIDER range 250-800 days post-halving ===
+  // Historical peaks: ~365d (2013), ~530d (2017), ~550d (2021)
+  // Widen to catch early AND late peaks
+  const peakCenter = 480;
+  const peakWidth = 400; // Was 350, widened
+  const daysDiff = Math.abs(daysSH - peakCenter);
+  const peakWindowProximity = Math.max(0, 1 - daysDiff / peakWidth);
+
+  // === EUPHORIA ZONE: >800 days from low = extreme late cycle ===
+  let euphoriaBonus = 0;
+  if (daysSinceLow > 800) {
+    euphoriaBonus = Math.min(0.25, (daysSinceLow - 800) / 600 * 0.25);
+  }
 
   // Combine factors
   const baseScore =
-    progressFromLow * 0.35 +
-    Math.min(1, Math.max(0, progressFromHalving)) * 0.20 +
-    peakWindowProximity * 0.20 +
+    progressFromLow * 0.30 +
+    Math.min(1, Math.max(0, progressFromHalving)) * 0.15 +
+    peakWindowProximity * 0.25 +   // INCREASED: peak window more important
     preHalvingRisk +
-    postHalvingCaution;
+    postHalvingCaution +
+    bottomZoneDiscount +           // NEW: negative contribution at bottoms
+    euphoriaBonus;                 // NEW: extreme late cycle risk
 
   // Smooth with quadratic curve
-  const smoothed = baseScore < 0.5
-    ? 2 * baseScore * baseScore
-    : 1 - 2 * Math.pow(1 - baseScore, 2);
+  const clamped = Math.min(1, Math.max(0, baseScore));
+  const smoothed = clamped < 0.5
+    ? 2 * clamped * clamped
+    : 1 - 2 * Math.pow(1 - clamped, 2);
 
   return Math.min(1, Math.max(0, smoothed));
 }

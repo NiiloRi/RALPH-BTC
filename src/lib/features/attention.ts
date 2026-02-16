@@ -6,8 +6,13 @@
 import { DailyData } from '../types';
 
 /**
- * Google Trends proxy using price momentum
- * Strong price moves typically correlate with search interest
+ * Google Trends proxy using price momentum and behavior signals
+ *
+ * IMPROVED:
+ * - ATH proximity weight REDUCED from 50% to 20% (BTC regularly makes new ATHs in bull runs)
+ * - Added consecutive-ATH detector: multiple new ATHs in 30d = euphoria
+ * - Added parabolic advance detector: monthly return acceleration
+ * - Return magnitude weight INCREASED for stronger top signals
  */
 export function calculateAttentionProxy(
   data: DailyData[],
@@ -21,7 +26,7 @@ export function calculateAttentionProxy(
   const return7d = Math.abs(current.return7d || 0);
   const return30d = Math.abs(current.return30d || 0);
 
-  // ATH proximity = high attention
+  // ATH proximity
   const prices = data.slice(0, index + 1).map(d => d.price);
   let athPrice = 0;
   for (let i = 0; i <= index; i++) {
@@ -29,17 +34,45 @@ export function calculateAttentionProxy(
   }
   const athProximity = current.price / athPrice;
 
+  // NEW: Count new ATH breaks in last 30 days (euphoria detector)
+  let athBreaks = 0;
+  let runningATH = prices[Math.max(0, index - 30)];
+  for (let i = Math.max(0, index - 30); i <= index; i++) {
+    if (prices[i] > runningATH) {
+      athBreaks++;
+      runningATH = prices[i];
+    }
+  }
+  const athBreakScore = Math.min(1, athBreaks / 8);
+
   // Volatility spike = attention spike
   const vols = data.slice(0, index + 1).map(d => d.realizedVol30d || 0);
   const avgVol = vols.slice(0, -1).reduce((a, b) => a + b, 0) / Math.max(1, vols.length - 1);
   const volRatio = avgVol > 0 ? (current.realizedVol30d || 0) / avgVol : 1;
 
-  // Combine signals
+  // NEW: Parabolic advance detector
+  let parabolicScore = 0;
+  if (index >= 90 && current.return30d && current.return90d) {
+    const monthlyRate = current.return30d;
+    const avgMonthlyRate = current.return90d / 3;
+    if (avgMonthlyRate > 0 && monthlyRate > 0) {
+      const acceleration = monthlyRate / avgMonthlyRate;
+      parabolicScore = Math.min(1, Math.max(0, (acceleration - 1) / 2));
+    }
+  }
+
+  // Rebalanced weights
   const returnScore = Math.min(1, (return7d + return30d) * 3);
-  const athScore = athProximity; // 1 at ATH, lower otherwise
+  const athScore = athProximity;
   const volScore = Math.min(1, volRatio / 2);
 
-  return returnScore * 0.3 + athScore * 0.5 + volScore * 0.2;
+  return (
+    returnScore * 0.25 +        // Return magnitude (was 0.30)
+    athScore * 0.20 +            // ATH proximity (REDUCED from 0.50)
+    volScore * 0.15 +            // Vol spike (was 0.20)
+    athBreakScore * 0.20 +       // NEW: ATH break frequency
+    parabolicScore * 0.20        // NEW: Parabolic advance
+  );
 }
 
 /**

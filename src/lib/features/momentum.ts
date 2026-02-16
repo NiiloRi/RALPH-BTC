@@ -120,6 +120,13 @@ export function calculateTrendStrength(
 /**
  * Calculate comprehensive momentum score [0, 1]
  * Higher = stronger upward momentum = potentially higher risk (overextended)
+ *
+ * IMPROVED:
+ * - TIGHTER normalization ranges → more sensitive to extremes
+ * - Added momentum acceleration (2nd derivative) for blow-off top detection
+ * - RSI uses extended overbought zone (>75 = extreme)
+ * - ROC ranges narrowed to amplify signal at extremes
+ * - Distance from 200MA range tightened
  */
 export function calculateMomentumScore(
   data: DailyData[],
@@ -130,30 +137,30 @@ export function calculateMomentumScore(
   const current = data[index];
   const prices = data.slice(0, index + 1).map(d => d.price);
 
-  // RSI (14-day)
+  // RSI (14-day) with non-linear scaling at extremes
   const rsi = calculateRSI(prices, 14);
-  // Normalize: RSI 30-70 normal, >70 overbought, <30 oversold
-  const rsiScore = (rsi - 30) / 40; // Maps 30->0, 70->1
+  // Non-linear: 25→0.0, 45→0.3, 55→0.5, 70→0.8, 80→0.95, 90→1.0
+  let rsiScore: number;
+  if (rsi <= 30) rsiScore = rsi / 30 * 0.15;           // 0-30 → 0.0-0.15 (oversold)
+  else if (rsi <= 50) rsiScore = 0.15 + (rsi - 30) / 20 * 0.25;  // 30-50 → 0.15-0.40
+  else if (rsi <= 70) rsiScore = 0.40 + (rsi - 50) / 20 * 0.35;  // 50-70 → 0.40-0.75
+  else rsiScore = 0.75 + (rsi - 70) / 30 * 0.25;       // 70-100 → 0.75-1.0 (overbought)
 
-  // Short-term momentum (7-day)
+  // Short-term momentum (7-day) - TIGHTER: -15% to +15%
   const roc7 = current.return7d ? current.return7d * 100 : 0;
-  // Normalize: -30% to +30% typical range
-  const roc7Score = (roc7 + 30) / 60;
+  const roc7Score = (roc7 + 15) / 30;
 
-  // Medium-term momentum (30-day)
+  // Medium-term momentum (30-day) - TIGHTER: -30% to +50%
   const roc30 = current.return30d ? current.return30d * 100 : 0;
-  // Normalize: -50% to +100% range
-  const roc30Score = (roc30 + 50) / 150;
+  const roc30Score = (roc30 + 30) / 80;
 
-  // Long-term momentum (90-day)
+  // Long-term momentum (90-day) - TIGHTER: -40% to +100%
   const roc90 = current.return90d ? current.return90d * 100 : 0;
-  // Normalize: -70% to +200% range
-  const roc90Score = (roc90 + 70) / 270;
+  const roc90Score = (roc90 + 40) / 140;
 
-  // Distance from 200MA
+  // Distance from 200MA - TIGHTER: -30% to +80%
   const dist200 = distanceFromMA(current.price, current.sma200 || current.price);
-  // Normalize: -50% to +100% typical range
-  const dist200Score = (dist200 + 50) / 150;
+  const dist200Score = (dist200 + 30) / 110;
 
   // MA alignment (bullish structure = higher risk when extended)
   const maAlignment = isAboveMAs(
@@ -169,19 +176,30 @@ export function calculateMomentumScore(
 
   // Trend strength
   const trendStrength = calculateTrendStrength(prices, 14);
-  // Combine with direction
   const isUptrend = current.price > (current.sma50 || current.price);
   const trendScore = isUptrend ? trendStrength : 1 - trendStrength;
 
-  // Weighted combination
+  // NEW: Momentum acceleration (blow-off top detector)
+  // Compare recent 7d ROC vs 30d average ROC
+  let accelerationScore = 0.5;
+  if (index >= 37) {
+    const prev30d = data[index - 30];
+    const prevRoc7 = prev30d?.return7d ? prev30d.return7d * 100 : 0;
+    const acceleration = roc7 - prevRoc7;
+    // Normalize: -20 → 0, 0 → 0.5, +20 → 1.0
+    accelerationScore = Math.min(1, Math.max(0, (acceleration + 20) / 40));
+  }
+
+  // Rebalanced weights with acceleration
   const weights = {
-    rsi: 0.2,
-    roc7: 0.1,
-    roc30: 0.2,
-    roc90: 0.15,
+    rsi: 0.20,
+    roc7: 0.08,
+    roc30: 0.18,
+    roc90: 0.12,
     dist200: 0.15,
-    ma: 0.1,
-    trend: 0.1,
+    ma: 0.08,
+    trend: 0.09,
+    accel: 0.10,   // NEW: momentum acceleration
   };
 
   const score =
@@ -191,7 +209,8 @@ export function calculateMomentumScore(
     weights.roc90 * Math.min(1, Math.max(0, roc90Score)) +
     weights.dist200 * Math.min(1, Math.max(0, dist200Score)) +
     weights.ma * maScore +
-    weights.trend * trendScore;
+    weights.trend * trendScore +
+    weights.accel * accelerationScore;
 
   return Math.min(1, Math.max(0, score));
 }

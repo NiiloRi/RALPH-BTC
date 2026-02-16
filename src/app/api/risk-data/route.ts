@@ -72,25 +72,24 @@ const HISTORICAL_CYCLES: CycleData[] = [
   { halvingDate: '2016-07-09', low: 200, lowDate: '2015-01-14', high: 19800, highDate: '2017-12-17' },
   // Cycle 3: Third halving
   { halvingDate: '2020-05-11', low: 3200, lowDate: '2018-12-15', high: 69000, highDate: '2021-11-10' },
-  // Cycle 4: Fourth halving (current)
-  { halvingDate: '2024-04-20', low: 15500, lowDate: '2022-11-21', high: 73800, highDate: '2024-03-14' },
+  // Cycle 4: Fourth halving (current) - updated to actual cycle peak
+  { halvingDate: '2024-04-20', low: 15500, lowDate: '2022-11-21', high: 109000, highDate: '2025-01-20' },
 ];
 
-// Component weights - optimized for peak/bottom detection
-// Updated: Macro weight increased to 15% due to new M2/Fed Funds indicators
+// Component weights - optimized for peak/bottom detection (v2 improved)
 const DEFAULT_WEIGHTS = {
-  valuation: 0.22,   // Mayer multiple (reduced from 0.25)
-  momentum: 0.25,    // RSI/momentum - key for extremes (reduced from 0.30)
-  volatility: 0.08,  // Background (reduced from 0.10)
-  cycle: 0.15,       // Timing context (unchanged)
-  macro: 0.15,       // M2, Fed Funds, yield curve, real rates (increased from 0.05!)
-  attention: 0.15,   // Retail FOMO/fear (unchanged)
+  valuation: 0.28,   // MVRV + NVT proxy + drawdown + power law
+  momentum: 0.18,    // RSI + ROC + acceleration
+  volatility: 0.06,  // Background context
+  cycle: 0.22,       // Halving cycle timing - critical for BTC
+  macro: 0.14,       // M2, Fed Funds, yield curve
+  attention: 0.12,   // Retail FOMO/fear detection
 };
 
-// Calibration params - slope=12, center=0.45 for better peak detection
+// Calibration params - slope=7 for smooth gradations, center=0.48 to reduce false positives
 const DEFAULT_CALIBRATION = {
-  slope: 12,
-  center: 0.45,
+  slope: 7,
+  center: 0.48,
 };
 
 // Historical data stored as static JSON (2010-2017, before Binance)
@@ -136,9 +135,14 @@ async function fetchAllBinanceData(): Promise<PriceData[]> {
   while (startTime < endTime) {
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&limit=${limit}`;
 
+    const fetchController = new AbortController();
+    const fetchTimeout = setTimeout(() => fetchController.abort(), 10000);
+
     const response = await fetch(url, {
       headers: { 'Accept': 'application/json' },
+      signal: fetchController.signal,
     });
+    clearTimeout(fetchTimeout);
 
     if (!response.ok) {
       throw new Error(`Binance API error: ${response.status}`);
