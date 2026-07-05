@@ -35,6 +35,11 @@ function createMockFeatures(count: number): FeatureVector[] {
     cycleRelativePrice: 0.7 + i * 0.001,
     macroScore: 0.4 + Math.random() * 0.2,
     dxyZScore: (Math.random() - 0.5),
+    m2Signal: 0.5,
+    fedFundsSignal: 0.5,
+    yieldCurveSignal: 0.5,
+    realRateSignal: 0.5,
+    dynamicMacroWeight: 0.14,
     attentionScore: 0.3 + Math.random() * 0.4,
     price: 50000 + i * 100,
   }));

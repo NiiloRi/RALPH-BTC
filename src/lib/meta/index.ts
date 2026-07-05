@@ -216,7 +216,8 @@ export function extendUIDataWithMeta(
  */
 export function calculateSimplifiedMetaLayers(
   riskOutput: RiskOutput,
-  recentRisks: RiskOutput[]
+  recentRisks: RiskOutput[],
+  options?: { dataCompleteness?: number }
 ): Partial<MetaLayersOutput> {
   const output: Partial<MetaLayersOutput> = {
     date: riskOutput.date,
@@ -226,7 +227,9 @@ export function calculateSimplifiedMetaLayers(
 
   // Calculate confidence if we have enough history
   if (recentRisks.length >= 14) {
-    output.confidence = calculateRiskConfidence(recentRisks, recentRisks.length - 1);
+    output.confidence = calculateRiskConfidence(recentRisks, recentRisks.length - 1, {
+      dataCompleteness: options?.dataCompleteness,
+    });
   }
 
   // Calculate momentum if we have enough history

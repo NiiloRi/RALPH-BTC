@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  interpolateMonthlyToDaily,
   calculateReturn,
   calculateRealizedVol,
   calculateSMA,
@@ -171,5 +172,50 @@ describe('validateDailyData', () => {
 
     const result = validateDailyData(data);
     expect(result.valid).toBe(false);
+  });
+});
+
+describe('interpolateMonthlyToDaily (walk-forward safety)', () => {
+  const monthly = new Map<string, number>([
+    ['2023-01-01', 100],
+    ['2023-02-01', 200],
+    ['2023-03-01', 300],
+  ]);
+
+  it('never uses a future observation (no interpolation toward next month)', () => {
+    const daily = interpolateMonthlyToDaily(monthly, '2023-01-01', '2023-03-15');
+    // Mid-January must equal the January print exactly (old code returned ~150,
+    // interpolated halfway toward February's then-unpublished value)
+    expect(daily.get('2023-01-15')).toBe(100);
+    expect(daily.get('2023-02-15')).toBe(200);
+  });
+
+  it('leaves dates before the first observation missing (no backward fill from future)', () => {
+    const daily = interpolateMonthlyToDaily(monthly, '2022-12-01', '2023-01-05');
+    expect(daily.get('2022-12-15')).toBeUndefined();
+    expect(daily.get('2023-01-01')).toBe(100);
+  });
+
+  it('respects the publication lag', () => {
+    const daily = interpolateMonthlyToDaily(monthly, '2023-01-01', '2023-03-15', 28);
+    // On Feb 10 the February print (dated Feb 1) is only 9 days old -> not yet
+    // published under a 28-day lag; the January value must still be in effect.
+    expect(daily.get('2023-02-10')).toBe(100);
+    // By Mar 5 the February print is 32 days old -> published.
+    expect(daily.get('2023-03-05')).toBe(200);
+  });
+
+  it('value on any day never depends on observations dated after that day', () => {
+    const truncated = new Map([['2023-01-01', 100], ['2023-02-01', 200]]);
+    const full = interpolateMonthlyToDaily(monthly, '2023-01-01', '2023-02-20');
+    const trunc = interpolateMonthlyToDaily(truncated, '2023-01-01', '2023-02-20');
+    // Removing the March observation must not change any value up to Feb 20
+    for (const [date, value] of trunc) {
+      expect(full.get(date)).toBe(value);
+    }
+  });
+
+  it('returns empty map for empty input', () => {
+    expect(interpolateMonthlyToDaily(new Map(), '2023-01-01', '2023-02-01').size).toBe(0);
   });
 });

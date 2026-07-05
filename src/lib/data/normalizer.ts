@@ -111,13 +111,24 @@ export function handleOutliers(
 }
 
 /**
- * Interpolate monthly data to daily using linear interpolation
- * This is useful for M2 and Fed Funds which are released monthly
+ * Expand monthly data to daily using WALK-FORWARD-SAFE forward fill.
+ *
+ * LOOKAHEAD FIX: the previous implementation linearly interpolated between
+ * the surrounding monthly points, which uses the NEXT month's value — a
+ * value that was not published (or even measured) on the day in question.
+ * It also back-filled dates before the first observation from the future.
+ * Both paths leaked future data into historical macro signals.
+ *
+ * Now each day gets the latest observation whose date is at least
+ * `publicationLagDays` old (FRED monthly series are published with a lag:
+ * M2 ~4 weeks, Fed Funds ~1 week). Days before the first usable
+ * observation get no value (callers already treat missing as neutral).
  */
 export function interpolateMonthlyToDaily(
   monthlyData: Map<string, number>,
   startDate: string,
-  endDate: string
+  endDate: string,
+  publicationLagDays: number = 0
 ): Map<string, number> {
   const result = new Map<string, number>();
 
@@ -129,41 +140,28 @@ export function interpolateMonthlyToDaily(
   const start = new Date(startDate);
   const end = new Date(endDate);
   const current = new Date(start);
+  const lagMs = publicationLagDays * 24 * 60 * 60 * 1000;
 
   while (current <= end) {
     const dateStr = current.toISOString().split('T')[0];
+    // Latest observation date that was already published on this day
+    const knowableCutoff = new Date(current.getTime() - lagMs)
+      .toISOString()
+      .split('T')[0];
 
-    // Find the surrounding monthly data points
     let prevDate: string | null = null;
-    let nextDate: string | null = null;
-
     for (const mDate of sortedDates) {
-      if (mDate <= dateStr) {
+      if (mDate <= knowableCutoff) {
         prevDate = mDate;
-      }
-      if (mDate >= dateStr && !nextDate) {
-        nextDate = mDate;
+      } else {
+        break;
       }
     }
 
-    if (prevDate && nextDate && prevDate !== nextDate) {
-      // Linear interpolation
-      const prevValue = monthlyData.get(prevDate)!;
-      const nextValue = monthlyData.get(nextDate)!;
-      const prevTime = new Date(prevDate).getTime();
-      const nextTime = new Date(nextDate).getTime();
-      const currentTime = current.getTime();
-
-      const ratio = (currentTime - prevTime) / (nextTime - prevTime);
-      const interpolatedValue = prevValue + ratio * (nextValue - prevValue);
-      result.set(dateStr, interpolatedValue);
-    } else if (prevDate) {
-      // Use last known value (forward fill)
+    if (prevDate) {
       result.set(dateStr, monthlyData.get(prevDate)!);
-    } else if (nextDate) {
-      // Use next available value (backward fill for very early dates)
-      result.set(dateStr, monthlyData.get(nextDate)!);
     }
+    // No value before the first publication — deliberately left missing.
 
     current.setDate(current.getDate() + 1);
   }
@@ -272,12 +270,13 @@ export function normalizeToDailyData(
       yieldSpreadData = macroData.yieldSpread;
       realRateData = macroData.realRate;
 
-      // Interpolate monthly data (M2, Fed Funds) to daily
+      // Expand monthly data (M2, Fed Funds) to daily with publication lags
+      // (M2 releases ~4 weeks after month end, Fed Funds ~1 week)
       if (macroData.m2.size > 0) {
-        m2Daily = interpolateMonthlyToDaily(macroData.m2, startDate, endDate);
+        m2Daily = interpolateMonthlyToDaily(macroData.m2, startDate, endDate, 28);
       }
       if (macroData.fedFunds.size > 0) {
-        fedFundsDaily = interpolateMonthlyToDaily(macroData.fedFunds, startDate, endDate);
+        fedFundsDaily = interpolateMonthlyToDaily(macroData.fedFunds, startDate, endDate, 7);
       }
     }
   }

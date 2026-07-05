@@ -5,6 +5,7 @@
  */
 
 import { FeatureVector, RiskOutput } from '../types';
+import { getRiskBand, getRiskAction } from './bands';
 
 /**
  * Default component weights - optimized for peak/bottom detection
@@ -284,24 +285,16 @@ export function calculateRawEnsembleWithDynamicMacro(
 
 /**
  * Get risk level description
+ * Delegates to the canonical band definitions in bands.ts so the model,
+ * dashboard gauge, action label, and legend can never disagree.
  */
 export function getRiskLevel(risk: number): {
   level: 'low' | 'moderate-low' | 'neutral' | 'moderate-high' | 'high';
   description: string;
 } {
-  if (risk < 0.2) {
-    return { level: 'low', description: 'Strong accumulation zone' };
-  }
-  if (risk < 0.4) {
-    return { level: 'moderate-low', description: 'Good buying opportunity' };
-  }
-  if (risk < 0.6) {
-    return { level: 'neutral', description: 'Hold / DCA' };
-  }
-  if (risk < 0.8) {
-    return { level: 'moderate-high', description: 'Consider taking profits' };
-  }
-  return { level: 'high', description: 'Extreme caution advised' };
+  const band = getRiskBand(risk);
+  const action = getRiskAction(risk);
+  return { level: band.level, description: action.desc };
 }
 
 /**

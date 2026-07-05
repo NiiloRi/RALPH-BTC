@@ -16,6 +16,8 @@ import {
 import { HALVING_DATES } from '@/lib/types';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
+import { getRiskBand, getRiskAction, qualifyAction, RISK_BANDS } from '@/lib/risk/bands';
+import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 
 interface UIDataPoint {
   date: string;
@@ -160,6 +162,8 @@ export default function RiskDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<string>('');
+  const [isLiveSource, setIsLiveSource] = useState(false);
+  const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [showSmoothed, setShowSmoothed] = useState(true);
   const [smoothingLevel, setSmoothingLevel] = useState(0); // 0 = no extra smoothing, higher = more
@@ -203,6 +207,8 @@ export default function RiskDashboard() {
           setData(apiData.data);
           setLastUpdated(apiData.lastUpdated);
           setDataSource(`Live from ${apiData.source}`);
+          setIsLiveSource(true);
+          setMacroAvailable(apiData.macroDataAvailable === true);
           setLoading(false);
           return;
         }
@@ -226,6 +232,8 @@ export default function RiskDashboard() {
         if (text.startsWith('[')) {
           setData(JSON.parse(text));
           setDataSource('Static JSON');
+          setIsLiveSource(false);
+          setMacroAvailable(null); // unknown for static exports
         } else {
           const lines = text.trim().split('\n');
           const header = lines[0].split(',');
@@ -255,6 +263,8 @@ export default function RiskDashboard() {
 
           setData(parsed);
           setDataSource('Static CSV');
+          setIsLiveSource(false);
+          setMacroAvailable(null);
         }
 
         setLoading(false);
@@ -422,14 +432,17 @@ export default function RiskDashboard() {
       .map(h => h.toISOString().split('T')[0]);
   }, [filteredData, showHalvings]);
 
-  // Calculate meta-layers for the latest data point
+  // Calculate meta-layers for the latest data point.
+  //
+  // FIX: previously computed from `extraSmoothedData` (the display-filtered,
+  // display-smoothed series), so zooming, the time-range buttons, and the
+  // EMA slider silently CHANGED the reported confidence/momentum/guidance.
+  // Meta-layers now always use the full raw dataset, so they describe the
+  // model, not the current chart view.
   const currentMetaLayers = useMemo((): MetaLayersOutput | undefined => {
-    if (extraSmoothedData.length < 30) return undefined;
+    if (data.length < 30) return undefined;
 
-    const latestPoint = extraSmoothedData[extraSmoothedData.length - 1];
-
-    // Build RiskOutput-like objects from UI data for simplified calculation
-    const recentRisks = extraSmoothedData.slice(-60).map(d => ({
+    const recentRisks = data.slice(-60).map(d => ({
       date: d.date,
       price: d.price,
       risk: d.risk,
@@ -437,16 +450,31 @@ export default function RiskDashboard() {
       components: d.components,
     }));
 
+    // When macro data is unavailable the macro component is a neutral 0.5
+    // fallback (14% of the model), so data completeness drops accordingly.
+    const dataCompleteness = macroAvailable === true ? 1 : 0.86;
+
     try {
       const meta = calculateSimplifiedMetaLayers(
         recentRisks[recentRisks.length - 1],
-        recentRisks
+        recentRisks,
+        { dataCompleteness }
       );
       return meta as MetaLayersOutput;
     } catch {
       return undefined;
     }
-  }, [extraSmoothedData]);
+  }, [data, macroAvailable]);
+
+  // Price vs 200-week SMA — classic long-horizon cycle context metric.
+  // Display-only: NOT part of the risk score. Walk-forward safe (average of
+  // the trailing 1400 daily closes).
+  const sma200wRatio = useMemo((): number | null => {
+    if (data.length < 200) return null;
+    const closes = data.slice(-1400).map(d => d.price);
+    const sma = closes.reduce((a, b) => a + b, 0) / closes.length;
+    return sma > 0 ? data[data.length - 1].price / sma : null;
+  }, [data]);
 
   // Risk color gradient
   const getRiskColor = (risk: number) => {
@@ -473,26 +501,30 @@ export default function RiskDashboard() {
     );
   }
 
-  // Use full unfiltered data for the Today card so it always shows current values
+  // Use full unfiltered data for the Today card so it always shows current values.
+  // HEADLINE = smoothed risk (the model's canonical output; the raw daily
+  // value is shown as secondary). Band + action labels both come from the
+  // canonical bands module, so they can no longer contradict each other.
   const latestData = data[data.length - 1];
-  const riskLevel =
-    latestData.risk < 0.2 ? 'Low' :
-    latestData.risk < 0.4 ? 'Moderate-Low' :
-    latestData.risk < 0.6 ? 'Neutral' :
-    latestData.risk < 0.8 ? 'Moderate-High' : 'High';
+  const headlineRisk = latestData.smoothedRisk;
+  const band = getRiskBand(headlineRisk);
+  const action = getRiskAction(headlineRisk);
+  const confidenceLevel = currentMetaLayers?.confidence?.level;
+  const qualified = qualifyAction(action, confidenceLevel);
+  const componentsDisagree =
+    (currentMetaLayers?.confidence?.componentDispersion ?? 0) > 0.25;
 
-  const riskSignal =
-    latestData.risk < 0.15 ? { text: 'Strong Buy Zone', emoji: '🟢', desc: 'Historically excellent accumulation area' } :
-    latestData.risk < 0.30 ? { text: 'Buy Zone', emoji: '🟢', desc: 'Good DCA opportunity, low risk' } :
-    latestData.risk < 0.45 ? { text: 'Moderate Buy', emoji: '🟡', desc: 'Acceptable entry, normal conditions' } :
-    latestData.risk < 0.60 ? { text: 'Hold / Neutral', emoji: '🟡', desc: 'No strong signal, stay patient' } :
-    latestData.risk < 0.75 ? { text: 'Caution', emoji: '🟠', desc: 'Consider taking partial profits' } :
-    latestData.risk < 0.88 ? { text: 'High Risk', emoji: '🔴', desc: 'Reduce exposure, take profits' } :
-    { text: 'Extreme Risk', emoji: '🔴', desc: 'Historically near cycle top' };
+  // Data freshness: warn when the newest data point is old (silent staleness
+  // was previously possible via the static-file fallback).
+  const staleDays = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(latestData.date).getTime()) / 86400000)
+  );
+  const isStale = staleDays > 2;
 
-  // 7-day change (always from full unfiltered data)
+  // 7-day change (smoothed, from full unfiltered data)
   const prev7d = data.length >= 8 ? data[data.length - 8] : null;
-  const riskChange7d = prev7d ? latestData.risk - prev7d.risk : 0;
+  const riskChange7d = prev7d ? latestData.smoothedRisk - prev7d.smoothedRisk : 0;
   const priceChange7d = prev7d && prev7d.price > 0 ? (latestData.price - prev7d.price) / prev7d.price : 0;
 
   const timeRangeButtons: { label: string; value: TimeRange }[] = [
@@ -521,25 +553,36 @@ export default function RiskDashboard() {
                 <circle
                   cx="60" cy="60" r="52"
                   fill="none"
-                  stroke={getRiskColor(latestData.risk)}
+                  stroke={getRiskColor(headlineRisk)}
                   strokeWidth="10"
-                  strokeDasharray={`${latestData.risk * 327} 327`}
+                  strokeDasharray={`${headlineRisk * 327} 327`}
                   strokeLinecap="round"
                   className="transition-all duration-1000"
                 />
               </svg>
               <div className="text-center z-10">
-                <div className="text-3xl font-bold" style={{ color: getRiskColor(latestData.risk) }}>
-                  {(latestData.risk * 100).toFixed(1)}%
+                <div className="text-3xl font-bold" style={{ color: getRiskColor(headlineRisk) }}>
+                  {(headlineRisk * 100).toFixed(1)}%
                 </div>
-                <div className="text-xs text-gray-400 mt-0.5">{riskLevel}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{band.label}</div>
+                <div className="text-[10px] text-gray-600">raw {(latestData.risk * 100).toFixed(1)}%</div>
               </div>
             </div>
             <div className="mt-2 text-center">
-              <span className="text-lg">{riskSignal.emoji}</span>
-              <span className="ml-1 font-semibold text-white text-sm">{riskSignal.text}</span>
+              <span className="text-lg">{action.emoji}</span>
+              <span className="ml-1 font-semibold text-white text-sm">{qualified.text}</span>
             </div>
-            <div className="text-xs text-gray-500 mt-0.5 text-center max-w-[200px]">{riskSignal.desc}</div>
+            <div className="text-xs text-gray-500 mt-0.5 text-center max-w-[200px]">{action.desc}</div>
+            {qualified.qualifier && (
+              <div className="mt-1 text-[10px] text-yellow-500/90 bg-yellow-900/20 border border-yellow-800/30 rounded px-2 py-0.5 text-center max-w-[200px]">
+                ⚠ {qualified.qualifier}
+              </div>
+            )}
+            {componentsDisagree && (
+              <div className="mt-1 text-[10px] text-orange-400/90 bg-orange-900/20 border border-orange-800/30 rounded px-2 py-0.5 text-center max-w-[200px]">
+                ⚠ components disagree — read the breakdown, not just the number
+              </div>
+            )}
           </div>
 
           {/* Middle: Price & changes */}
@@ -554,8 +597,8 @@ export default function RiskDashboard() {
               )}
             </div>
             <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Risk Trend (7d)</div>
-              <div className="text-xl font-bold" style={{ color: getRiskColor(latestData.risk) }}>
+              <div className="text-xs text-gray-500 mb-1">Risk Trend (7d, smoothed)</div>
+              <div className="text-xl font-bold" style={{ color: getRiskColor(headlineRisk) }}>
                 {riskChange7d >= 0 ? '+' : ''}{(riskChange7d * 100).toFixed(1)}%
               </div>
               <div className="text-xs text-gray-500 mt-1">
@@ -565,7 +608,11 @@ export default function RiskDashboard() {
             <div className="bg-gray-800/60 rounded-lg p-3">
               <div className="text-xs text-gray-500 mb-1">Cycle Phase</div>
               <div className="text-xl font-bold text-white capitalize">{latestData.cyclePhase}</div>
-              <div className="text-xs text-gray-500 mt-1">Post-halving</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Time-anchor heuristic{sma200wRatio !== null && (
+                  <span className="block">P / 200W MA: {sma200wRatio.toFixed(2)}×</span>
+                )}
+              </div>
             </div>
             <div className="bg-gray-800/60 rounded-lg p-3">
               <div className="text-xs text-gray-500 mb-1">Valuation</div>
@@ -592,34 +639,58 @@ export default function RiskDashboard() {
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Component Breakdown</div>
             <div className="space-y-2">
               {[
-                { label: 'Valuation', value: latestData.components.valuation, weight: 28, color: '#3b82f6' },
-                { label: 'Cycle', value: latestData.components.cycle, weight: 22, color: '#a855f7' },
-                { label: 'Momentum', value: latestData.components.momentum, weight: 18, color: '#22c55e' },
-                { label: 'Macro', value: latestData.components.macro, weight: 14, color: '#06b6d4' },
-                { label: 'Attention', value: latestData.components.attention, weight: 12, color: '#eab308' },
-                { label: 'Volatility', value: latestData.components.volatility, weight: 6, color: '#f97316' },
-              ].map(comp => (
-                <div key={comp.label} className="flex items-center gap-2">
-                  <div className="text-xs text-gray-400 w-16 text-right">{comp.label}</div>
-                  <div className="flex-1 bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{ width: `${comp.value * 100}%`, backgroundColor: comp.color }}
-                    />
+                { key: 'valuation', label: 'Valuation', value: latestData.components.valuation, color: '#3b82f6' },
+                { key: 'cycle', label: 'Cycle', value: latestData.components.cycle, color: '#a855f7' },
+                { key: 'momentum', label: 'Momentum', value: latestData.components.momentum, color: '#22c55e' },
+                { key: 'macro', label: 'Macro', value: latestData.components.macro, color: '#06b6d4' },
+                { key: 'attention', label: 'Attention', value: latestData.components.attention, color: '#eab308' },
+                { key: 'volatility', label: 'Volatility', value: latestData.components.volatility, color: '#f97316' },
+              ].map(comp => {
+                // Macro pinned at neutral without real data is a fallback, not
+                // a measurement — show it as such instead of a fake "50%".
+                const isFallback = comp.key === 'macro' && macroAvailable === false;
+                const weightPct = Math.round((DEFAULT_WEIGHTS[comp.key] ?? 0) * 100);
+                return (
+                  <div key={comp.label} className="flex items-center gap-2" title={`${comp.label}: ${weightPct}% of model weight`}>
+                    <div className="text-xs text-gray-400 w-16 text-right">{comp.label}</div>
+                    <div className="flex-1 bg-gray-800 rounded-full h-2.5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-700"
+                        style={{
+                          width: `${comp.value * 100}%`,
+                          backgroundColor: isFallback ? '#4b5563' : comp.color,
+                        }}
+                      />
+                    </div>
+                    <div className="text-xs font-mono w-14 text-right" style={{ color: isFallback ? '#6b7280' : comp.color }}>
+                      {isFallback ? 'n/a' : `${(comp.value * 100).toFixed(0)}%`}
+                    </div>
                   </div>
-                  <div className="text-xs font-mono w-10 text-right" style={{ color: comp.color }}>
-                    {(comp.value * 100).toFixed(0)}%
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+            {macroAvailable === false && (
+              <div className="mt-2 text-[10px] text-gray-500">
+                Macro data unavailable (no FRED key) — component held at neutral 0.5 in the score.
+              </div>
+            )}
             {dataSource && (
-              <div className="mt-3 text-xs text-gray-600 flex items-center gap-1">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                {dataSource}
-                {lastUpdated && (
+              <div className="mt-3 text-xs flex items-center gap-1 flex-wrap">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${isLiveSource && !isStale ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                <span className="text-gray-500">{dataSource}</span>
+                {lastUpdated && isLiveSource && (
                   <span className="text-gray-600 ml-1">
                     {new Date(lastUpdated).toLocaleTimeString()}
+                  </span>
+                )}
+                {!isLiveSource && (
+                  <span className="text-yellow-500/90 bg-yellow-900/20 border border-yellow-800/30 rounded px-1.5 py-0.5">
+                    FALLBACK DATA — last point {latestData.date}
+                  </span>
+                )}
+                {isStale && (
+                  <span className="text-orange-400 bg-orange-900/20 border border-orange-800/30 rounded px-1.5 py-0.5">
+                    STALE: {staleDays}d old
                   </span>
                 )}
               </div>
@@ -1235,7 +1306,7 @@ export default function RiskDashboard() {
             </div>
             <div className="flex items-center gap-1">
               <div className="w-8 h-0.5" style={{ backgroundColor: '#06b6d4', borderStyle: 'dashed' }}></div>
-              <span className="text-gray-400">Combined (15% weight)</span>
+              <span className="text-gray-400">Combined ({Math.round((DEFAULT_WEIGHTS.macro ?? 0) * 100)}% weight)</span>
             </div>
           </div>
 
@@ -1248,6 +1319,11 @@ export default function RiskDashboard() {
               <li><strong className="text-violet-400">Yield Curve:</strong> Normal curve (positive) = bullish, inverted = bearish</li>
               <li><strong className="text-pink-400">Real Rate:</strong> Negative real rates = bullish for hard assets</li>
             </ul>
+            <p className="mt-2 text-gray-500">
+              Direction note: in this model, <em>bullish</em> macro (loose liquidity) INCREASES the
+              risk score — easy money fuels late-cycle euphoria, tight money coincides with bottoms.
+              A high macro reading means &ldquo;conditions that historically preceded tops&rdquo;, not &ldquo;bad for BTC&rdquo;.
+            </p>
           </div>
         </div>
       )}
@@ -1259,34 +1335,39 @@ export default function RiskDashboard() {
         onToggle={() => setShowMetaLayers(!showMetaLayers)}
       />
 
-      {/* Risk Legend */}
+      {/* Risk Legend — rendered from the canonical bands so it can never
+          drift from the gauge/action labels */}
       <div className="grid grid-cols-5 gap-2">
-        <div className="rounded-lg bg-green-900/30 p-3 text-center">
-          <p className="text-lg font-bold text-green-400">0-20%</p>
-          <p className="text-sm text-green-300">Low Risk</p>
-          <p className="text-xs text-gray-400">Accumulate</p>
-        </div>
-        <div className="rounded-lg bg-lime-900/30 p-3 text-center">
-          <p className="text-lg font-bold text-lime-400">20-40%</p>
-          <p className="text-sm text-lime-300">Moderate-Low</p>
-          <p className="text-xs text-gray-400">DCA</p>
-        </div>
-        <div className="rounded-lg bg-yellow-900/30 p-3 text-center">
-          <p className="text-lg font-bold text-yellow-400">40-60%</p>
-          <p className="text-sm text-yellow-300">Neutral</p>
-          <p className="text-xs text-gray-400">Hold</p>
-        </div>
-        <div className="rounded-lg bg-orange-900/30 p-3 text-center">
-          <p className="text-lg font-bold text-orange-400">60-80%</p>
-          <p className="text-sm text-orange-300">Moderate-High</p>
-          <p className="text-xs text-gray-400">Take Profits</p>
-        </div>
-        <div className="rounded-lg bg-red-900/30 p-3 text-center">
-          <p className="text-lg font-bold text-red-400">80-100%</p>
-          <p className="text-sm text-red-300">High Risk</p>
-          <p className="text-xs text-gray-400">Caution</p>
-        </div>
+        {RISK_BANDS.map((b, i) => {
+          const bandClasses = [
+            { bg: 'bg-green-900/30', title: 'text-green-400', sub: 'text-green-300' },
+            { bg: 'bg-lime-900/30', title: 'text-lime-400', sub: 'text-lime-300' },
+            { bg: 'bg-yellow-900/30', title: 'text-yellow-400', sub: 'text-yellow-300' },
+            { bg: 'bg-orange-900/30', title: 'text-orange-400', sub: 'text-orange-300' },
+            { bg: 'bg-red-900/30', title: 'text-red-400', sub: 'text-red-300' },
+          ][i];
+          const isCurrent = band.level === b.level;
+          return (
+            <div
+              key={b.level}
+              className={`rounded-lg ${bandClasses.bg} p-3 text-center ${isCurrent ? 'ring-1 ring-white/40' : ''}`}
+            >
+              <p className={`text-lg font-bold ${bandClasses.title}`}>
+                {Math.round(b.min * 100)}-{Math.round(b.max * 100)}%
+              </p>
+              <p className={`text-sm ${bandClasses.sub}`}>{b.label}</p>
+              <p className="text-xs text-gray-400">{b.action}</p>
+            </div>
+          );
+        })}
       </div>
+      <p className="text-[11px] text-gray-600 leading-relaxed">
+        Band thresholds are heuristic quintiles of the calibrated score, not validated trade
+        signals — personal decision-support vocabulary only. Historical risk values near past
+        cycle bottoms are more favorable than a real-time model could have shown, because cycle
+        anchors use lows that were only confirmable months later. Component weights and
+        calibration were tuned on full history (in-sample).
+      </p>
     </div>
   );
 }

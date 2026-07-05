@@ -110,15 +110,36 @@ export function getConfidenceLevel(confidence: number): ConfidenceLevel {
 }
 
 /**
+ * Options for confidence calculation
+ */
+export interface ConfidenceOptions {
+  /**
+   * Fraction of the model's input data that is real (vs neutral fallback),
+   * in [0, 1]. Example: when FRED macro data is unavailable the macro
+   * component is pinned to 0.5 — that is NOT a measurement, so completeness
+   * should be reduced by the macro weight (≈0.86).
+   *
+   * Why this matters: a component pinned at neutral 0.5 sits in the middle
+   * of the pack and REDUCES dispersion, which previously INCREASED the
+   * "component agreement" score. Missing data could therefore manufacture
+   * "high" confidence. With completeness < 0.95 the level is capped at
+   * 'medium' and the value is scaled down.
+   */
+  dataCompleteness?: number;
+}
+
+/**
  * Calculate Risk Confidence from a series of RiskOutputs
  *
  * @param risks - Array of RiskOutput (historical, most recent last)
  * @param currentIndex - Index of the current day to calculate confidence for
+ * @param options - Optional data-completeness adjustment
  * @returns RiskConfidence for the specified day
  */
 export function calculateRiskConfidence(
   risks: RiskOutput[],
-  currentIndex: number
+  currentIndex: number,
+  options?: ConfidenceOptions
 ): RiskConfidence {
   if (currentIndex < 0 || currentIndex >= risks.length) {
     throw new Error(`Invalid index ${currentIndex} for risks array of length ${risks.length}`);
@@ -148,15 +169,26 @@ export function calculateRiskConfidence(
 
   // Combined confidence score
   // Weight agreement more heavily than stability
-  const confidence = componentAgreement * 0.6 + regimeStability * 0.4;
+  const rawConfidence = componentAgreement * 0.6 + regimeStability * 0.4;
+
+  // Data-completeness adjustment: missing inputs (neutral fallbacks) must
+  // reduce confidence, never inflate it. Scale the value and cap the level.
+  const completeness = Math.min(1, Math.max(0, options?.dataCompleteness ?? 1));
+  const confidence = rawConfidence * (0.6 + 0.4 * completeness);
+
+  let level = getConfidenceLevel(confidence);
+  if (completeness < 0.95 && level === 'high') {
+    level = 'medium';
+  }
 
   return {
     value: Math.min(1, Math.max(0, confidence)),
-    level: getConfidenceLevel(confidence),
+    level,
     componentAgreement,
     regimeStability,
     componentDispersion,
     componentCount: componentScores.length,
+    dataCompleteness: completeness,
   };
 }
 

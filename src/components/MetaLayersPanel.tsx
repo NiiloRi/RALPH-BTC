@@ -104,8 +104,16 @@ function ConfidenceCard({ confidence }: { confidence: RiskConfidence }) {
         </div>
       </div>
 
+      {confidence.dataCompleteness !== undefined && confidence.dataCompleteness < 0.95 && (
+        <div className="mt-3 p-2 bg-yellow-900/20 rounded border border-yellow-800/30 text-xs text-yellow-500/80">
+          Data completeness {(confidence.dataCompleteness * 100).toFixed(0)}% — some inputs are
+          neutral fallbacks (e.g. macro without FRED data). Confidence is capped at medium.
+        </div>
+      )}
+
       <p className="mt-3 text-xs text-gray-500">
-        Measures agreement between risk components and regime stability
+        Measures agreement between risk components and regime stability. Note: this is signal
+        agreement, not validation confidence — it does not mean the model is right.
       </p>
     </div>
   );
@@ -223,7 +231,8 @@ function DrawdownCard({ drawdown }: { drawdown: DrawdownProbability }) {
       </div>
 
       <p className="mt-3 text-xs text-gray-500">
-        Separate estimate - does NOT influence base risk
+        Separate estimate - does NOT influence base risk. Probabilities are heuristic priors
+        scaled by regime, not fitted frequencies — treat as rough orders of magnitude.
       </p>
     </div>
   );
@@ -458,7 +467,7 @@ export default function MetaLayersPanel({ meta, isExpanded, onToggle }: MetaLaye
           <div className="w-2 h-2 rounded-full bg-purple-500" />
           <span className="text-white font-medium">Meta-Layers</span>
           <span className="text-xs text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded">
-            ADDITIVE / ORTHOGONAL
+            READ-ONLY / NON-MUTATING
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -499,10 +508,11 @@ export default function MetaLayersPanel({ meta, isExpanded, onToggle }: MetaLaye
               <div className="bg-gray-800/30 rounded p-3 text-xs text-gray-400">
                 <p>
                   <strong className="text-white">Important:</strong> These meta-layers are{' '}
-                  <span className="text-purple-400">additive</span> and{' '}
-                  <span className="text-purple-400">orthogonal</span> to the base risk score.
-                  They provide additional context but{' '}
-                  <span className="text-yellow-400">never feed back</span> into the core risk calculation.
+                  <span className="text-purple-400">read-only views derived from</span> the base risk
+                  score — they{' '}
+                  <span className="text-yellow-400">never feed back</span> into the core risk
+                  calculation. They are NOT independent evidence: confidence, momentum and guidance
+                  all share the same underlying inputs as the risk score itself.
                 </p>
               </div>
 

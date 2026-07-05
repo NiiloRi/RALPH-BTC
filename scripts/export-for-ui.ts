@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { FeatureVector, UIDataPoint } from '../src/lib/types';
-import { calculateAllRisks, DEFAULT_WEIGHTS } from '../src/lib/risk/model';
+import { calculateAllRisks, DEFAULT_WEIGHTS, DEFAULT_CALIBRATION } from '../src/lib/risk/model';
 import { isHalvingDate } from '../src/lib/features/cycle';
 
 function loadFeatures(): FeatureVector[] {
@@ -31,10 +31,12 @@ function loadModel(): {
     return JSON.parse(fs.readFileSync(modelPath, 'utf-8'));
   }
 
-  // Use defaults
+  // Use defaults — MUST match the model's DEFAULT_CALIBRATION so static
+  // exports and the live API produce the same scores (previously {4, 0.5}
+  // here vs {7, 0.48} in the API caused divergent fallback data)
   return {
     weights: DEFAULT_WEIGHTS,
-    calibration: { slope: 4, center: 0.5 },
+    calibration: DEFAULT_CALIBRATION,
     smoothing: 0.3,
   };
 }

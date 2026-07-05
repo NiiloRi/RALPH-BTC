@@ -9,6 +9,7 @@
 
 import { NextResponse } from 'next/server';
 import { fetchAllMacroData, loadMacroCache, saveMacroCache } from '@/lib/data/price-fetcher';
+import { calculateCycleScore, HISTORICAL_CYCLES } from '@/lib/features/cycle';
 import type { MacroDataBundle } from '@/lib/types';
 
 // Binance kline format
@@ -54,27 +55,11 @@ const HALVING_DATES = [
   new Date('2024-04-20'),
 ];
 
-// Historical cycle data for cycle-relative calculations
-interface CycleData {
-  halvingDate: string;
-  low: number;
-  lowDate: string;
-  high: number;
-  highDate: string;
-}
-
-const HISTORICAL_CYCLES: CycleData[] = [
-  // Cycle 0: Pre-first-halving (genesis to first halving)
-  { halvingDate: '2012-11-28', low: 0.05, lowDate: '2010-07-17', high: 32, highDate: '2011-06-08' },
-  // Cycle 1: First halving
-  { halvingDate: '2012-11-28', low: 2, lowDate: '2011-11-18', high: 1150, highDate: '2013-12-04' },
-  // Cycle 2: Second halving
-  { halvingDate: '2016-07-09', low: 200, lowDate: '2015-01-14', high: 19800, highDate: '2017-12-17' },
-  // Cycle 3: Third halving
-  { halvingDate: '2020-05-11', low: 3200, lowDate: '2018-12-15', high: 69000, highDate: '2021-11-10' },
-  // Cycle 4: Fourth halving (current) - updated to actual cycle peak
-  { halvingDate: '2024-04-20', low: 15500, lowDate: '2022-11-21', high: 109000, highDate: '2025-01-20' },
-];
+// NOTE on cycle anchors: HISTORICAL_CYCLES (imported from @/lib/features/cycle)
+// contains cycle lows that were only CONFIRMABLE months after they occurred.
+// Today's reading is fine (all anchors are long past), but HISTORICAL chart
+// values in the first ~6 months after each cycle low are more favorable than
+// a real-time model could have produced. Known limitation, documented in UI.
 
 // Component weights - optimized for peak/bottom detection (v2 improved)
 const DEFAULT_WEIGHTS = {
@@ -234,61 +219,22 @@ function calculateVolatility(prices: number[], period: number = 30): number {
 }
 
 /**
- * Get halving index for a given date
- */
-function getHalvingIndex(date: Date): number {
-  for (let i = HALVING_DATES.length - 1; i >= 0; i--) {
-    if (date >= HALVING_DATES[i]) return i;
-  }
-  return -1;
-}
-
-/**
- * Get previous cycle's low and high for cycle-relative calculations
- */
-function getPreviousCycleRange(date: Date): { low: number; high: number } {
-  const halvingIdx = getHalvingIndex(date);
-
-  // For cycle 0 or 1, use first cycle data
-  if (halvingIdx <= 0) {
-    return { low: HISTORICAL_CYCLES[0].low, high: HISTORICAL_CYCLES[0].high };
-  }
-
-  // Use the previous completed cycle
-  const prevCycleIdx = Math.min(halvingIdx - 1, HISTORICAL_CYCLES.length - 2);
-  return { low: HISTORICAL_CYCLES[prevCycleIdx].low, high: HISTORICAL_CYCLES[prevCycleIdx].high };
-}
-
-/**
- * Calculate cycle-relative valuation (0-1)
- * Where is current price relative to previous cycle's range
- */
-function calculateCycleRelativeValuation(
-  price: number,
-  prevCycleLow: number,
-  prevCycleHigh: number
-): number {
-  if (prevCycleHigh <= prevCycleLow || prevCycleLow <= 0) {
-    return 0.5;
-  }
-  const position = (price - prevCycleLow) / (prevCycleHigh - prevCycleLow);
-  return Math.max(0, Math.min(1, position));
-}
-
-/**
- * Get cycle phase based on days since halving
- * IMPROVED: Uses time from cycle LOW, not just halving
+ * Get cycle phase and score for a date.
+ *
+ * UNIFIED MODEL FIX: the cycle score previously used an older inline formula
+ * that diverged from the tested library implementation (different peak
+ * window, no bottom-zone discount, no euphoria detection). The dashboard was
+ * therefore displaying a different model than the one covered by tests and
+ * the walk-forward backtest code. The score now comes from
+ * calculateCycleScore() in @/lib/features/cycle (v2, 27 unit tests).
  */
 function getCycleInfo(date: Date): {
   daysSinceHalving: number;
   daysSinceLow: number;
   phase: 'early' | 'mid' | 'late';
-  progress: number;
   cycleScore: number;
 } {
   // Find the current cycle based on which cycle LOW we're after
-  // This is more accurate than using halving dates because the cycle
-  // starts from the low, not the halving
   let cycleIdx = 0;
   for (let i = HISTORICAL_CYCLES.length - 1; i >= 0; i--) {
     const cycleLow = new Date(HISTORICAL_CYCLES[i].lowDate);
@@ -304,91 +250,22 @@ function getCycleInfo(date: Date): {
     (date.getTime() - cycleLowDate.getTime()) / (1000 * 60 * 60 * 24)
   ));
 
-  // Find the relevant halving for this cycle
   const cycleHalvingDate = new Date(currentCycle.halvingDate);
   const daysSinceHalving = Math.floor(
     (date.getTime() - cycleHalvingDate.getTime()) / (1000 * 60 * 60 * 24)
   );
 
-  // Typical cycle from low to peak: ~1000-1200 days
-  const typicalLowToPeak = 1100;
-  const progressFromLow = Math.min(1.5, daysSinceLow / typicalLowToPeak);
-
-  // Progress from halving (secondary)
-  const cycleLength = 1460;
-  const progressFromHalving = daysSinceHalving / cycleLength;
-
-  // Determine phase based on progress from LOW
+  // Phase from progress since cycle low (typical low→peak ≈ 1100 days)
+  const progressFromLow = Math.min(1.5, daysSinceLow / 1100);
   let phase: 'early' | 'mid' | 'late' = 'early';
   if (progressFromLow > 0.75) phase = 'late';
   else if (progressFromLow > 0.40) phase = 'mid';
-
-  // Calculate improved cycle score
-  // Pre-halving risk: approaching halving with elevated progress from low
-  // This captures front-running behavior (e.g., 2024 ATH before halving)
-  let preHalvingRisk = 0;
-  if (daysSinceHalving < 0) {
-    // Days until halving (negative daysSinceHalving means before halving)
-    const daysUntilHalving = -daysSinceHalving;
-
-    // Risk increases as we approach halving with meaningful progress
-    // Even at 40% progress, if we're close to halving, risk should be elevated
-    if (progressFromLow > 0.3 && daysUntilHalving < 180) {
-      // Close to halving and making progress = elevated risk
-      const proximityFactor = 1 - daysUntilHalving / 180;
-      const progressFactor = (progressFromLow - 0.3) / 0.4; // 0.3 to 0.7 range
-      preHalvingRisk = Math.min(0.35, proximityFactor * progressFactor * 0.35);
-    }
-
-    // Additional boost if progress is very high pre-halving (strong front-running)
-    if (progressFromLow > 0.5) {
-      preHalvingRisk += Math.min(0.15, (progressFromLow - 0.5) * 0.3);
-    }
-  }
-
-  // Post-halving caution (first 180 days)
-  // Risk floor - don't assume instant safety after halving
-  let postHalvingCaution = 0;
-  if (daysSinceHalving >= 0 && daysSinceHalving < 180) {
-    // Starts at 0.30 and decays to 0 over 180 days
-    postHalvingCaution = 0.30 * (1 - daysSinceHalving / 180);
-  }
-
-  // Peak risk window: 400-700 days post-halving historically
-  // This is when most cycle tops occur
-  const peakRiskDays = 550; // center of peak window
-  const daysDiff = Math.abs(daysSinceHalving - peakRiskDays);
-  const peakWindowProximity = Math.max(0, 1 - daysDiff / 350);
-
-  // Combined cycle score
-  // Weight distribution:
-  // - Progress from low: 35% (primary driver)
-  // - Progress from halving: 20% (secondary timing)
-  // - Peak window: 20% (historical pattern)
-  // - Pre/post halving adjustments: 25% (dynamic adjustments)
-  const baseScore =
-    progressFromLow * 0.35 +
-    Math.min(1, Math.max(0, progressFromHalving)) * 0.20 +
-    peakWindowProximity * 0.20 +
-    preHalvingRisk +
-    postHalvingCaution;
-
-  // Smooth with quadratic curve
-  const smoothed = baseScore < 0.5
-    ? 2 * baseScore * baseScore
-    : 1 - 2 * Math.pow(1 - baseScore, 2);
-
-  const cycleScore = Math.min(1, Math.max(0, smoothed));
-
-  // Return combined progress (weighted)
-  const combinedProgress = progressFromLow * 0.6 + Math.min(1, progressFromHalving) * 0.4;
 
   return {
     daysSinceHalving,
     daysSinceLow,
     phase,
-    progress: Math.min(1, combinedProgress),
-    cycleScore,
+    cycleScore: calculateCycleScore(date),
   };
 }
 
@@ -408,7 +285,7 @@ function sigmoid(x: number): number {
 }
 
 /**
- * Apply calibration - slope=10 for full 0-1 range
+ * Apply calibration (sigmoid, slope=7, center=0.48 — see DEFAULT_CALIBRATION)
  */
 function applyCalibration(rawScore: number): number {
   const shifted = rawScore - DEFAULT_CALIBRATION.center;
@@ -561,38 +438,39 @@ function calculateM2YoY(
 }
 
 /**
- * Interpolate monthly data to daily
+ * Expand monthly data to daily — WALK-FORWARD SAFE.
+ *
+ * LOOKAHEAD FIX: the old version linearly interpolated toward the NEXT
+ * month's value (not yet published on that day) and back-filled early dates
+ * from the future. Each day now gets the latest observation that was at
+ * least `publicationLagDays` old (M2 releases ~4 weeks after month end,
+ * Fed Funds ~1 week). Days before the first usable observation stay
+ * missing, which downstream code already treats as neutral.
  */
 function interpolateMonthlyToDaily(
   monthlyData: Map<string, number>,
-  dates: string[]
+  dates: string[],
+  publicationLagDays: number = 0
 ): Map<string, number> {
   const result = new Map<string, number>();
   if (monthlyData.size === 0) return result;
 
   const sortedMonthlyDates = Array.from(monthlyData.keys()).sort();
+  const lagMs = publicationLagDays * 24 * 60 * 60 * 1000;
 
   for (const dateStr of dates) {
-    let prevDate: string | null = null;
-    let nextDate: string | null = null;
+    const knowableCutoff = new Date(new Date(dateStr).getTime() - lagMs)
+      .toISOString()
+      .split('T')[0];
 
+    let prevDate: string | null = null;
     for (const mDate of sortedMonthlyDates) {
-      if (mDate <= dateStr) prevDate = mDate;
-      if (mDate >= dateStr && !nextDate) nextDate = mDate;
+      if (mDate <= knowableCutoff) prevDate = mDate;
+      else break;
     }
 
-    if (prevDate && nextDate && prevDate !== nextDate) {
-      const prevValue = monthlyData.get(prevDate)!;
-      const nextValue = monthlyData.get(nextDate)!;
-      const prevTime = new Date(prevDate).getTime();
-      const nextTime = new Date(nextDate).getTime();
-      const currentTime = new Date(dateStr).getTime();
-      const ratio = (currentTime - prevTime) / (nextTime - prevTime);
-      result.set(dateStr, prevValue + ratio * (nextValue - prevValue));
-    } else if (prevDate) {
+    if (prevDate) {
       result.set(dateStr, monthlyData.get(prevDate)!);
-    } else if (nextDate) {
-      result.set(dateStr, monthlyData.get(nextDate)!);
     }
   }
   return result;
@@ -855,9 +733,9 @@ export async function GET() {
       }
 
       if (macroBundle) {
-        // Interpolate monthly data to daily
-        m2Daily = interpolateMonthlyToDaily(macroBundle.m2, allDates);
-        fedFundsDaily = interpolateMonthlyToDaily(macroBundle.fedFunds, allDates);
+        // Expand monthly data to daily with publication lags (no lookahead)
+        m2Daily = interpolateMonthlyToDaily(macroBundle.m2, allDates, 28);
+        fedFundsDaily = interpolateMonthlyToDaily(macroBundle.fedFunds, allDates, 7);
       }
     } catch (macroError) {
       console.warn('Failed to fetch macro data, continuing without:', macroError);

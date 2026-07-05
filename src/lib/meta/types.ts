@@ -39,6 +39,12 @@ export interface RiskConfidence {
   componentDispersion: number;
   /** Number of components contributing */
   componentCount: number;
+  /**
+   * Fraction of model inputs backed by real data (1 = all live, <1 = some
+   * components are neutral fallbacks, e.g. macro without FRED data).
+   * Confidence level is capped at 'medium' when below 0.95.
+   */
+  dataCompleteness?: number;
 }
 
 // ============================================================================

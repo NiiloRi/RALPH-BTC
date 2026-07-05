@@ -21,7 +21,7 @@ export default function Home() {
             <div>
               <h1 className="text-3xl font-bold text-white">BTC Risk Metric</h1>
               <p className="mt-2 text-gray-400">
-                Cycle-aware Bitcoin risk assessment with walk-forward validated model
+                Cycle-aware Bitcoin risk heuristic — private decision-support tool
               </p>
             </div>
             <Link
@@ -84,31 +84,40 @@ export default function Home() {
               <li className="flex items-start gap-2">
                 <span className="text-gray-500">•</span>
                 <span>
-                  <strong className="text-white">No hindsight leakage:</strong> All features computed using only past data
+                  <strong className="text-white">Mostly walk-forward safe:</strong> price-derived
+                  features (MAs, drawdown, RSI, ATH, volatility) use only past data. Known
+                  exception: cycle anchors use historical lows that were only confirmable months
+                  after the fact, so historical readings near past bottoms are optimistic.
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-gray-500">•</span>
                 <span>
-                  <strong className="text-white">Walk-forward validation:</strong> Model trained on rolling windows
+                  <strong className="text-white">Validation status:</strong> a walk-forward backtest
+                  framework exists in the repo, but the displayed weights and calibration were
+                  tuned on full history (in-sample). Treat the score as a structured heuristic,
+                  not a validated predictor.
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-gray-500">•</span>
                 <span>
-                  <strong className="text-white">Cycle-aware:</strong> Adjusts for lengthening cycles and diminishing returns
+                  <strong className="text-white">Cycle-aware:</strong> halving-cycle timing heuristics
+                  fitted to 3-4 past cycles — a small sample; the current cycle may differ.
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-gray-500">•</span>
                 <span>
-                  <strong className="text-white">Calibrated output:</strong> Risk scores map to probability-like values
+                  <strong className="text-white">Calibrated output:</strong> sigmoid-mapped 0-100%
+                  score. It is a relative ranking, not a probability of anything.
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-gray-500">•</span>
                 <span>
-                  <strong className="text-white">Smoothed:</strong> EMA smoothing reduces noise while preserving signals
+                  <strong className="text-white">Data honesty:</strong> stale or fallback data is
+                  flagged in the dashboard; missing macro data is held at neutral and marked n/a.
                 </span>
               </li>
             </ul>
@@ -116,7 +125,7 @@ export default function Home() {
         </section>
 
         <footer className="mt-8 text-center text-xs text-gray-600">
-          <p>Not financial advice. Use at your own risk.</p>
+          <p>Private personal-use analytics. Not financial advice, no return promises. Action labels are personal decision-support vocabulary. Use at your own risk.</p>
         </footer>
       </main>
     </div>

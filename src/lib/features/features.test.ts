@@ -102,6 +102,11 @@ describe('validateFeatureVector', () => {
       cycleRelativePrice: 0.7,
       macroScore: 0.5,
       dxyZScore: 0,
+    m2Signal: 0.5,
+    fedFundsSignal: 0.5,
+    yieldCurveSignal: 0.5,
+    realRateSignal: 0.5,
+    dynamicMacroWeight: 0.14,
       attentionScore: 0.5,
       price: 50000,
     };
@@ -135,6 +140,11 @@ describe('validateFeatureVector', () => {
       cycleRelativePrice: 0.7,
       macroScore: 0.5,
       dxyZScore: 0,
+    m2Signal: 0.5,
+    fedFundsSignal: 0.5,
+    yieldCurveSignal: 0.5,
+    realRateSignal: 0.5,
+    dynamicMacroWeight: 0.14,
       attentionScore: 0.5,
       price: -100, // Invalid
     };
@@ -167,6 +177,11 @@ describe('validateFeatureVector', () => {
       cycleRelativePrice: 0.7,
       macroScore: 0.5,
       dxyZScore: 0,
+    m2Signal: 0.5,
+    fedFundsSignal: 0.5,
+    yieldCurveSignal: 0.5,
+    realRateSignal: 0.5,
+    dynamicMacroWeight: 0.14,
       attentionScore: 0.5,
       price: 50000,
     };
