@@ -10,37 +10,50 @@ import {
 } from './calibration';
 import { FeatureVector } from '../types';
 
+// Deterministic PRNG (mulberry32): unseeded randomness risks flaky tests
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // Helper to create mock features
 function createMockFeatures(count: number): FeatureVector[] {
+  const rand = mulberry32(9001);
   return Array(count).fill(null).map((_, i) => ({
     date: `2024-${String(Math.floor(i / 28) + 1).padStart(2, '0')}-${String((i % 28) + 1).padStart(2, '0')}`,
-    valuationScore: 0.3 + Math.random() * 0.4,
-    priceToSma200Ratio: 1 + Math.random() * 0.5,
-    priceToSma350x111Ratio: 0.9 + Math.random() * 0.3,
-    daysSinceATH: Math.floor(Math.random() * 100),
-    drawdownFromATH: Math.random() * 0.3,
-    momentumScore: 0.3 + Math.random() * 0.4,
-    return30d: (Math.random() - 0.5) * 0.3,
-    return90d: (Math.random() - 0.5) * 0.5,
-    sma50Above200: Math.random() > 0.5,
-    volatilityScore: 0.3 + Math.random() * 0.4,
-    realizedVol30d: 0.3 + Math.random() * 0.4,
-    volZScore: (Math.random() - 0.5) * 2,
-    cycleScore: 0.3 + Math.random() * 0.4,
+    valuationScore: 0.3 + rand() * 0.4,
+    priceToSma200Ratio: 1 + rand() * 0.5,
+    priceToSma350x111Ratio: 0.9 + rand() * 0.3,
+    daysSinceATH: Math.floor(rand() * 100),
+    drawdownFromATH: rand() * 0.3,
+    momentumScore: 0.3 + rand() * 0.4,
+    return30d: (rand() - 0.5) * 0.3,
+    return90d: (rand() - 0.5) * 0.5,
+    sma50Above200: rand() > 0.5,
+    volatilityScore: 0.3 + rand() * 0.4,
+    realizedVol30d: 0.3 + rand() * 0.4,
+    volZScore: (rand() - 0.5) * 2,
+    cycleScore: 0.3 + rand() * 0.4,
     daysSinceHalving: 200 + i,
     cyclePhase: 'mid' as const,
     estimatedCycleProgress: 0.4 + i * 0.001,
     prevCycleLow: 3200,
     prevCycleHigh: 69000,
     cycleRelativePrice: 0.7 + i * 0.001,
-    macroScore: 0.4 + Math.random() * 0.2,
-    dxyZScore: (Math.random() - 0.5),
+    macroScore: 0.4 + rand() * 0.2,
+    dxyZScore: (rand() - 0.5),
     m2Signal: 0.5,
     fedFundsSignal: 0.5,
     yieldCurveSignal: 0.5,
     realRateSignal: 0.5,
     dynamicMacroWeight: 0.14,
-    attentionScore: 0.3 + Math.random() * 0.4,
+    attentionScore: 0.3 + rand() * 0.4,
     price: 50000 + i * 100,
   }));
 }

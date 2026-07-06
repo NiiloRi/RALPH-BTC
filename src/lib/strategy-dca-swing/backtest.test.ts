@@ -14,7 +14,20 @@ import { DEFAULT_DCA_SWING_CONFIG } from './types';
 import { RiskDataPoint } from '../risk-metric-contract';
 
 // Generate test data
+// Deterministic PRNG (mulberry32): unseeded randomness risks flaky tests
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function generateTestData(days: number, startPrice: number = 40000): RiskDataPoint[] {
+  const rng = mulberry32(4242);
   const data: RiskDataPoint[] = [];
   let price = startPrice;
 
@@ -25,10 +38,10 @@ function generateTestData(days: number, startPrice: number = 40000): RiskDataPoi
     // Simulate price movement with cycle
     const cycleProgress = i / days;
     const cycleFactor = Math.sin(cycleProgress * Math.PI * 2);
-    price = startPrice * (1 + cycleFactor * 0.5 + (Math.random() - 0.5) * 0.02);
+    price = startPrice * (1 + cycleFactor * 0.5 + (rng() - 0.5) * 0.02);
 
     // Risk inversely correlated with cycle (high price = high risk)
-    const risk = 0.3 + 0.4 * (cycleFactor + 1) / 2 + (Math.random() - 0.5) * 0.1;
+    const risk = 0.3 + 0.4 * (cycleFactor + 1) / 2 + (rng() - 0.5) * 0.1;
 
     data.push({
       date: dateStr,

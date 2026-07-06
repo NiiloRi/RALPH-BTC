@@ -12,17 +12,31 @@ import {
 import { DEFAULT_BACKTEST_CONFIG } from './types';
 import { RiskDataPoint } from '../risk-metric-contract';
 
+// Deterministic PRNG (mulberry32) — unseeded Math.random() made these tests
+// flaky: assertions passed or failed depending on the generated price path.
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // Generate test data
 function generateTestData(days: number, startPrice: number = 40000): RiskDataPoint[] {
   const data: RiskDataPoint[] = [];
   let price = startPrice;
+  const rng = mulberry32(1337);
 
   for (let i = 0; i < days; i++) {
     const date = new Date(2023, 0, 1 + i);
     const dateStr = date.toISOString().split('T')[0];
 
     // Simulate price movement
-    price = price * (1 + (Math.random() - 0.5) * 0.05);
+    price = price * (1 + (rng() - 0.5) * 0.05);
 
     // Generate varying risk levels
     const risk = 0.3 + 0.4 * Math.sin((i / days) * Math.PI * 2);
@@ -119,27 +133,39 @@ describe('runBacktest', () => {
   });
 
   it('should respect tax budget constraint', () => {
+    // NOTE: the budget caps realized GAINS per year, not the number of sells.
+    // A low budget REDUCES each sell's size, so the strategy can end up making
+    // MORE (smaller) sells than an unconstrained run — the old sell-count
+    // assertion tested the wrong invariant and failed intermittently.
+    const budget = 100; // Very low budget (EUR realized gains / year)
     const config = {
       ...DEFAULT_BACKTEST_CONFIG,
       startDate: testData[0].date,
       initialCashEUR: 10000,
       strategy: {
         ...DEFAULT_BACKTEST_CONFIG.strategy,
-        annualTaxBudget: 100, // Very low budget
+        annualTaxBudget: budget,
       },
     };
 
-    const result = runBacktest(testData, config);
+    const constrained = runBacktest(testData, config);
+    const unconstrained = runBacktest(testData, {
+      ...config,
+      strategy: { ...config.strategy, annualTaxBudget: undefined },
+    });
 
-    // Should have fewer sells due to tax budget
-    expect(result.metrics.numberOfSells).toBeLessThanOrEqual(
-      runBacktest(testData, {
-        ...config,
-        strategy: {
-          ...config.strategy,
-          annualTaxBudget: undefined,
-        },
-      }).metrics.numberOfSells
+    // True invariant: realized gains per calendar year stay near the budget.
+    // Enforcement is approximate by design (reduced trades are sized at
+    // remaining*1.5, assuming gains ≈ 2/3 of proceeds), so allow the
+    // documented worst-case overshoot: budget + 1.5*budget = 2.5x.
+    for (const y of constrained.taxSummary.yearlyBreakdown) {
+      expect(y.totalGains).toBeLessThanOrEqual(budget * 2.5 + 1);
+    }
+
+    // And the budget must actually bind: total realized gains under the low
+    // budget cannot exceed the unconstrained run's.
+    expect(constrained.taxSummary.totalRealizedGains).toBeLessThanOrEqual(
+      unconstrained.taxSummary.totalRealizedGains + 1e-6
     );
   });
 
