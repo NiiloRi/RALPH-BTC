@@ -16,7 +16,9 @@ import {
 import { HALVING_DATES } from '@/lib/types';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
-import { getRiskBand, getRiskAction, qualifyAction, RISK_BANDS } from '@/lib/risk/bands';
+import { getRiskBand, RISK_BANDS } from '@/lib/risk/bands';
+import VerdictHero from './VerdictHero';
+import WhyPanel from './WhyPanel';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 
 interface UIDataPoint {
@@ -163,6 +165,7 @@ export default function RiskDashboard() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<string>('');
   const [isLiveSource, setIsLiveSource] = useState(false);
+  const [loadedAtMs, setLoadedAtMs] = useState<number | null>(null);
   const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [showSmoothed, setShowSmoothed] = useState(true);
@@ -177,7 +180,7 @@ export default function RiskDashboard() {
     max: 100,
     enabled: false,
   });
-  const [showMetaLayers, setShowMetaLayers] = useState(false);
+  const [showMetaLayers, setShowMetaLayers] = useState(true);
 
   // Zoom state
   const [zoomStart, setZoomStart] = useState<number | null>(null);
@@ -204,6 +207,7 @@ export default function RiskDashboard() {
 
         if (apiResponse.ok) {
           const apiData = await apiResponse.json();
+          setLoadedAtMs(Date.now());
           setData(apiData.data);
           setLastUpdated(apiData.lastUpdated);
           setDataSource(`Live from ${apiData.source}`);
@@ -232,6 +236,7 @@ export default function RiskDashboard() {
         if (text.startsWith('[')) {
           setData(JSON.parse(text));
           setDataSource('Static JSON');
+          setLoadedAtMs(Date.now());
           setIsLiveSource(false);
           setMacroAvailable(null); // unknown for static exports
         } else {
@@ -263,6 +268,7 @@ export default function RiskDashboard() {
 
           setData(parsed);
           setDataSource('Static CSV');
+          setLoadedAtMs(Date.now());
           setIsLiveSource(false);
           setMacroAvailable(null);
         }
@@ -476,15 +482,6 @@ export default function RiskDashboard() {
     return sma > 0 ? data[data.length - 1].price / sma : null;
   }, [data]);
 
-  // Risk color gradient
-  const getRiskColor = (risk: number) => {
-    if (risk < 0.2) return '#22c55e';
-    if (risk < 0.4) return '#84cc16';
-    if (risk < 0.6) return '#eab308';
-    if (risk < 0.8) return '#f97316';
-    return '#dc2626';
-  };
-
   if (loading) {
     return (
       <div className="flex h-[600px] items-center justify-center">
@@ -501,31 +498,19 @@ export default function RiskDashboard() {
     );
   }
 
-  // Use full unfiltered data for the Today card so it always shows current values.
-  // HEADLINE = smoothed risk (the model's canonical output; the raw daily
-  // value is shown as secondary). Band + action labels both come from the
-  // canonical bands module, so they can no longer contradict each other.
+  // Use full unfiltered data for the verdict so it always shows current values.
+  // Headline = smoothed risk (canonical model output); VerdictHero derives
+  // band/action/qualifiers from the canonical bands module internally.
   const latestData = data[data.length - 1];
-  const headlineRisk = latestData.smoothedRisk;
-  const band = getRiskBand(headlineRisk);
-  const action = getRiskAction(headlineRisk);
-  const confidenceLevel = currentMetaLayers?.confidence?.level;
-  const qualified = qualifyAction(action, confidenceLevel);
-  const componentsDisagree =
-    (currentMetaLayers?.confidence?.componentDispersion ?? 0) > 0.25;
+  const band = getRiskBand(latestData.smoothedRisk); // legend highlight
 
   // Data freshness: warn when the newest data point is old (silent staleness
   // was previously possible via the static-file fallback).
-  const staleDays = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(latestData.date).getTime()) / 86400000)
-  );
+  const staleDays = loadedAtMs === null
+    ? 0
+    : Math.max(0, Math.floor((loadedAtMs - new Date(latestData.date).getTime()) / 86400000));
   const isStale = staleDays > 2;
-
-  // 7-day change (smoothed, from full unfiltered data)
   const prev7d = data.length >= 8 ? data[data.length - 8] : null;
-  const riskChange7d = prev7d ? latestData.smoothedRisk - prev7d.smoothedRisk : 0;
-  const priceChange7d = prev7d && prev7d.price > 0 ? (latestData.price - prev7d.price) / prev7d.price : 0;
 
   const timeRangeButtons: { label: string; value: TimeRange }[] = [
     { label: 'YTD', value: 'ytd' },
@@ -538,166 +523,22 @@ export default function RiskDashboard() {
 
   return (
     <div className="w-full space-y-6">
-      {/* Today's Risk Card */}
-      <div className="rounded-xl border border-gray-700 bg-gradient-to-br from-gray-900 via-gray-850 to-gray-900 p-6 shadow-xl">
-        <div className="flex flex-col lg:flex-row gap-6">
-          {/* Left: Main risk gauge */}
-          <div className="flex-shrink-0 flex flex-col items-center justify-center min-w-[200px]">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-              {new Date(latestData.date).toLocaleDateString('fi-FI', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-            </div>
-            <div className="relative w-36 h-36 flex items-center justify-center">
-              {/* Circular risk gauge background */}
-              <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 120 120">
-                <circle cx="60" cy="60" r="52" fill="none" stroke="#1f2937" strokeWidth="10" />
-                <circle
-                  cx="60" cy="60" r="52"
-                  fill="none"
-                  stroke={getRiskColor(headlineRisk)}
-                  strokeWidth="10"
-                  strokeDasharray={`${headlineRisk * 327} 327`}
-                  strokeLinecap="round"
-                  className="transition-all duration-1000"
-                />
-              </svg>
-              <div className="text-center z-10">
-                <div className="text-3xl font-bold" style={{ color: getRiskColor(headlineRisk) }}>
-                  {(headlineRisk * 100).toFixed(1)}%
-                </div>
-                <div className="text-xs text-gray-400 mt-0.5">{band.label}</div>
-                <div className="text-[10px] text-gray-600">raw {(latestData.risk * 100).toFixed(1)}%</div>
-              </div>
-            </div>
-            <div className="mt-2 text-center">
-              <span className="text-lg">{action.emoji}</span>
-              <span className="ml-1 font-semibold text-white text-sm">{qualified.text}</span>
-            </div>
-            <div className="text-xs text-gray-500 mt-0.5 text-center max-w-[200px]">{action.desc}</div>
-            {qualified.qualifier && (
-              <div className="mt-1 text-[10px] text-yellow-500/90 bg-yellow-900/20 border border-yellow-800/30 rounded px-2 py-0.5 text-center max-w-[200px]">
-                ⚠ {qualified.qualifier}
-              </div>
-            )}
-            {componentsDisagree && (
-              <div className="mt-1 text-[10px] text-orange-400/90 bg-orange-900/20 border border-orange-800/30 rounded px-2 py-0.5 text-center max-w-[200px]">
-                ⚠ components disagree — read the breakdown, not just the number
-              </div>
-            )}
-          </div>
+      {/* Verdict-first hero (UI v2) */}
+      <VerdictHero
+        latest={latestData}
+        prev7d={prev7d}
+        meta={currentMetaLayers}
+        macroAvailable={macroAvailable}
+        isLiveSource={isLiveSource}
+        isStale={isStale}
+        staleDays={staleDays}
+        dataSource={dataSource}
+        lastUpdated={lastUpdated}
+        sma200wRatio={sma200wRatio}
+      />
 
-          {/* Middle: Price & changes */}
-          <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">BTC Price</div>
-              <div className="text-xl font-bold text-white">${latestData.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-              {prev7d && (
-                <div className={`text-xs mt-1 ${priceChange7d >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {priceChange7d >= 0 ? '+' : ''}{(priceChange7d * 100).toFixed(1)}% (7d)
-                </div>
-              )}
-            </div>
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Risk Trend (7d, smoothed)</div>
-              <div className="text-xl font-bold" style={{ color: getRiskColor(headlineRisk) }}>
-                {riskChange7d >= 0 ? '+' : ''}{(riskChange7d * 100).toFixed(1)}%
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {riskChange7d > 0.02 ? 'Rising' : riskChange7d < -0.02 ? 'Falling' : 'Stable'}
-              </div>
-            </div>
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Cycle Phase</div>
-              <div className="text-xl font-bold text-white capitalize">{latestData.cyclePhase}</div>
-              <div className="text-xs text-gray-500 mt-1">
-                Time-anchor heuristic{sma200wRatio !== null && (
-                  <span className="block">P / 200W MA: {sma200wRatio.toFixed(2)}×</span>
-                )}
-              </div>
-            </div>
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Valuation</div>
-              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.valuation) }}>
-                {(latestData.components.valuation * 100).toFixed(0)}%
-              </div>
-            </div>
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Momentum</div>
-              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.momentum) }}>
-                {(latestData.components.momentum * 100).toFixed(0)}%
-              </div>
-            </div>
-            <div className="bg-gray-800/60 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Cycle</div>
-              <div className="text-lg font-semibold" style={{ color: getRiskColor(latestData.components.cycle) }}>
-                {(latestData.components.cycle * 100).toFixed(0)}%
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Component breakdown bars */}
-          <div className="flex-shrink-0 min-w-[220px]">
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Component Breakdown</div>
-            <div className="space-y-2">
-              {[
-                { key: 'valuation', label: 'Valuation', value: latestData.components.valuation, color: '#3b82f6' },
-                { key: 'cycle', label: 'Cycle', value: latestData.components.cycle, color: '#a855f7' },
-                { key: 'momentum', label: 'Momentum', value: latestData.components.momentum, color: '#22c55e' },
-                { key: 'macro', label: 'Macro', value: latestData.components.macro, color: '#06b6d4' },
-                { key: 'attention', label: 'Attention', value: latestData.components.attention, color: '#eab308' },
-                { key: 'volatility', label: 'Volatility', value: latestData.components.volatility, color: '#f97316' },
-              ].map(comp => {
-                // Macro pinned at neutral without real data is a fallback, not
-                // a measurement — show it as such instead of a fake "50%".
-                const isFallback = comp.key === 'macro' && macroAvailable === false;
-                const weightPct = Math.round((DEFAULT_WEIGHTS[comp.key] ?? 0) * 100);
-                return (
-                  <div key={comp.label} className="flex items-center gap-2" title={`${comp.label}: ${weightPct}% of model weight`}>
-                    <div className="text-xs text-gray-400 w-16 text-right">{comp.label}</div>
-                    <div className="flex-1 bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{
-                          width: `${comp.value * 100}%`,
-                          backgroundColor: isFallback ? '#4b5563' : comp.color,
-                        }}
-                      />
-                    </div>
-                    <div className="text-xs font-mono w-14 text-right" style={{ color: isFallback ? '#6b7280' : comp.color }}>
-                      {isFallback ? 'n/a' : `${(comp.value * 100).toFixed(0)}%`}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {macroAvailable === false && (
-              <div className="mt-2 text-[10px] text-gray-500">
-                Macro data unavailable (no FRED key) — component held at neutral 0.5 in the score.
-              </div>
-            )}
-            {dataSource && (
-              <div className="mt-3 text-xs flex items-center gap-1 flex-wrap">
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${isLiveSource && !isStale ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
-                <span className="text-gray-500">{dataSource}</span>
-                {lastUpdated && isLiveSource && (
-                  <span className="text-gray-600 ml-1">
-                    {new Date(lastUpdated).toLocaleTimeString()}
-                  </span>
-                )}
-                {!isLiveSource && (
-                  <span className="text-yellow-500/90 bg-yellow-900/20 border border-yellow-800/30 rounded px-1.5 py-0.5">
-                    FALLBACK DATA — last point {latestData.date}
-                  </span>
-                )}
-                {isStale && (
-                  <span className="text-orange-400 bg-orange-900/20 border border-orange-800/30 rounded px-1.5 py-0.5">
-                    STALE: {staleDays}d old
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* Why this score — contribution-ordered breakdown with drill-down */}
+      <WhyPanel latest={latestData} macroAvailable={macroAvailable} />
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4">
