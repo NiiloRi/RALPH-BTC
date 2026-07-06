@@ -202,7 +202,7 @@ export default function StrategyPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ralph-trades-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `btc-risk-trades-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
   };
 
@@ -224,7 +224,7 @@ export default function StrategyPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ralph-tax-summary-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `btc-risk-tax-summary-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
   };
 
@@ -250,7 +250,7 @@ export default function StrategyPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">RALPH Strategy Backtest</h1>
+            <h1 className="text-2xl font-bold">BTC Risk Strategy Backtest</h1>
             <p className="text-gray-400 text-sm mt-1">
               Tax-aware investment strategy using risk metric
             </p>

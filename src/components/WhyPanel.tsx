@@ -65,19 +65,46 @@ const MACRO_SUBS: { key: keyof MacroComponents; label: string; note: string }[] 
 ];
 
 export default function WhyPanel({ latest, macroAvailable }: WhyPanelProps) {
+  const [expanded, setExpanded] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const pulls = useMemo(() => computePulls(latest.components), [latest.components]);
   const maxAbs = Math.max(...pulls.map(p => Math.abs(p.pull)), 0.001);
 
+  // Top up/down driver for the collapsed teaser
+  const up = pulls.find(p => p.pull > 0.005);
+  const down = pulls.find(p => p.pull < -0.005);
+
   return (
     <section className="rounded-2xl border px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
-      <div className="flex items-baseline justify-between mb-1">
-        <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>Why this score</h3>
-        <span className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
-          sorted by influence · raw = 50% + Σ pull
+      {/* Collapsible header */}
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-left"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-baseline gap-3">
+          <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>Why this score?</h3>
+          {!expanded && (up || down) && (
+            <span className="text-[12px]" style={{ color: 'var(--faint)' }}>
+              {up && <span style={{ color: '#f97316' }}>▲ {up.label}</span>}
+              {up && down && <span> · </span>}
+              {down && <span style={{ color: '#22c55e' }}>▼ {down.label}</span>}
+            </span>
+          )}
+        </div>
+        <span className="flex items-center gap-3">
+          <span className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
+            {expanded ? 'sorted by influence · raw = 50% + Σ pull' : 'component breakdown'}
+          </span>
+          <span className="text-lg leading-none w-4 text-center" style={{ color: 'var(--muted)' }}>
+            {expanded ? '−' : '+'}
+          </span>
         </span>
-      </div>
-      <p className="text-[11px] mb-4" style={{ color: 'var(--faint)' }}>
+      </button>
+
+      {expanded && (
+        <>
+      <p className="text-[11px] mb-4 mt-3" style={{ color: 'var(--faint)' }}>
         Pull = weight × (component − 50%), in raw-score points before sigmoid calibration. Click a row for method &amp; caveats.
       </p>
 
@@ -147,6 +174,8 @@ export default function WhyPanel({ latest, macroAvailable }: WhyPanelProps) {
           );
         })}
       </div>
+        </>
+      )}
     </section>
   );
 }

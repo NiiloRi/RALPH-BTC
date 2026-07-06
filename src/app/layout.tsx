@@ -16,7 +16,7 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RALPH · BTC Risk",
+  title: "BTC Risk Metric",
   description: "Private BTC market-risk decision support",
 };
 

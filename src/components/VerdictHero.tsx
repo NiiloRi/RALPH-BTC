@@ -10,6 +10,15 @@
  */
 
 import { useMemo } from 'react';
+import {
+  ComposedChart,
+  Line,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 import { getRiskBand, getRiskAction, qualifyAction } from '@/lib/risk/bands';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
@@ -41,6 +50,18 @@ interface VerdictHeroProps {
   dataSource: string;
   lastUpdated: string | null;
   sma200wRatio: number | null;
+  /** Trailing ~12 months of the quantile fan (price + Q1..Q99 bands, log) */
+  fanYear?: FanYearRow[];
+}
+
+export interface FanYearRow {
+  date: string;
+  price: number;
+  /** Fan position label for the day, e.g. "~Q23" */
+  tauLabel: string;
+  q01: number; q10: number; q25: number; q50: number; q75: number; q95: number; q99: number;
+  hiBand: [number, number];
+  loBand: [number, number];
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -167,7 +188,20 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
+    fanYear,
   } = props;
+
+  // 12-month price range for the mini-fan microlabel
+  const yearRange = useMemo(() => {
+    if (!fanYear || fanYear.length < 30) return null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const d of fanYear) {
+      if (d.price < lo) lo = d.price;
+      if (d.price > hi) hi = d.price;
+    }
+    return { lo, hi };
+  }, [fanYear]);
 
   const headlineRisk = latest.smoothedRisk;
   const band = getRiskBand(headlineRisk);
@@ -205,7 +239,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
       {/* status line */}
       <div className="relative flex flex-wrap items-center gap-2 px-6 pt-5">
         <span className="text-[11px] tracking-[0.2em] uppercase" style={{ color: 'var(--faint)' }}>
-          Ralph · BTC Risk
+          BTC Risk Metric
         </span>
         <span className="text-[11px]" style={{ color: 'var(--faint)' }}>
           {new Date(latest.date).toLocaleDateString('fi-FI', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
@@ -296,6 +330,79 @@ export default function VerdictHero(props: VerdictHeroProps) {
           )}
         </div>
       </div>
+
+      {/* 12-month mini quantile fan: where price sits in the Q1–Q99 bands,
+          one glance. Same deterministic full-sample fit as the big fan chart. */}
+      {fanYear && fanYear.length >= 30 && (
+        <div className="relative border-t px-6 pt-3 pb-4 rise" style={{ borderColor: 'var(--hairline)', animationDelay: '0.35s' }}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
+            <span>Quantile fan · last 12 months · log scale</span>
+            {yearRange && (
+              <span>
+                range ${(yearRange.lo / 1000).toFixed(1)}K – ${(yearRange.hi / 1000).toFixed(1)}K
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-3 normal-case tracking-normal text-[10px]">
+              <span className="flex items-center gap-1" style={{ color: '#60a5fa' }}>
+                <span className="w-3 h-0.5 rounded" style={{ background: '#60a5fa' }} />price
+              </span>
+              <span className="flex items-center gap-1" style={{ color: '#9ca3af' }}>
+                <span className="w-3 h-0.5 rounded" style={{ background: '#9ca3af' }} />median
+              </span>
+              <span style={{ color: 'var(--faint)' }}>bands Q1–Q99 · full-sample fit</span>
+            </span>
+          </div>
+          <div className="h-[130px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={fanYear} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(d: string) =>
+                    new Date(d).toLocaleDateString('en-US', { month: 'short' })
+                  }
+                  interval={Math.max(0, Math.floor(fanYear.length / 8) - 1)}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#55534d', fontSize: 9 }}
+                  height={14}
+                />
+                <YAxis scale="log" domain={['auto', 'auto']} hide />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const p = payload[0].payload as FanYearRow;
+                    return (
+                      <div className="rounded border px-2.5 py-1.5 text-[10px]" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)', color: 'var(--muted)' }}>
+                        <div style={{ color: 'var(--foreground)' }}>
+                          {new Date(p.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </div>
+                        <div style={{ color: '#60a5fa' }}>
+                          ${p.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          <span style={{ color: 'var(--muted)' }}> · {p.tauLabel}</span>
+                        </div>
+                        <div style={{ color: '#9ca3af' }}>Q50 ${(p.q50 / 1000).toFixed(1)}K</div>
+                      </div>
+                    );
+                  }}
+                />
+                {/* tail fills */}
+                <Area dataKey="hiBand" stroke="none" fill="#dc2626" fillOpacity={0.08} isAnimationActive={false} />
+                <Area dataKey="loBand" stroke="none" fill="#22c55e" fillOpacity={0.07} isAnimationActive={false} />
+                {/* fan curves */}
+                <Line dataKey="q99" stroke="#dc2626" strokeWidth={1} dot={false} isAnimationActive={false} />
+                <Line dataKey="q95" stroke="#ef4444" strokeWidth={1} dot={false} isAnimationActive={false} />
+                <Line dataKey="q75" stroke="#f472b6" strokeWidth={1} dot={false} isAnimationActive={false} />
+                <Line dataKey="q50" stroke="#9ca3af" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                <Line dataKey="q25" stroke="#86efac" strokeWidth={1} dot={false} isAnimationActive={false} />
+                <Line dataKey="q10" stroke="#22c55e" strokeWidth={1} dot={false} isAnimationActive={false} />
+                <Line dataKey="q01" stroke="#15803d" strokeWidth={1} dot={false} isAnimationActive={false} />
+                {/* price */}
+                <Line dataKey="price" stroke="#60a5fa" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

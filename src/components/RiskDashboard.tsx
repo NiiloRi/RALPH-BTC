@@ -17,8 +17,10 @@ import { HALVING_DATES } from '@/lib/types';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
 import { getRiskBand, RISK_BANDS } from '@/lib/risk/bands';
-import VerdictHero from './VerdictHero';
+import VerdictHero, { type FanYearRow } from './VerdictHero';
+import { fitQuantileFan, evaluateFan, impliedQuantile } from '@/lib/quantile-fan/quantile-fan';
 import WhyPanel from './WhyPanel';
+import QuantileFanChart from './QuantileFanChart';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 
 interface UIDataPoint {
@@ -158,6 +160,40 @@ function ComponentsTooltip({ active, payload }: TooltipProps) {
   );
 }
 
+type Tab = 'overview' | 'risk' | 'fan';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'risk', label: 'Risk metric' },
+  { id: 'fan', label: 'Quantile fan' },
+];
+
+function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+  return (
+    <div className="flex items-center gap-2" role="tablist" aria-label="Dashboard views">
+      {TABS.map(t => {
+        const on = t.id === active;
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(t.id)}
+            className="rounded-xl border px-4 py-2 text-[11px] uppercase tracking-[0.14em] transition-colors"
+            style={{
+              borderColor: on ? 'var(--muted)' : 'var(--hairline)',
+              background: on ? 'rgba(232,230,225,0.05)' : 'transparent',
+              color: on ? 'var(--foreground)' : 'var(--faint)',
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RiskDashboard() {
   const [data, setData] = useState<UIDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -167,6 +203,7 @@ export default function RiskDashboard() {
   const [isLiveSource, setIsLiveSource] = useState(false);
   const [loadedAtMs, setLoadedAtMs] = useState<number | null>(null);
   const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
+  const [priceSeries, setPriceSeries] = useState<{ date: string; close: number }[] | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [showSmoothed, setShowSmoothed] = useState(true);
   const [smoothingLevel, setSmoothingLevel] = useState(0); // 0 = no extra smoothing, higher = more
@@ -181,6 +218,7 @@ export default function RiskDashboard() {
     enabled: false,
   });
   const [showMetaLayers, setShowMetaLayers] = useState(true);
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   // Zoom state
   const [zoomStart, setZoomStart] = useState<number | null>(null);
@@ -213,6 +251,7 @@ export default function RiskDashboard() {
           setDataSource(`Live from ${apiData.source}`);
           setIsLiveSource(true);
           setMacroAvailable(apiData.macroDataAvailable === true);
+          setPriceSeries(Array.isArray(apiData.priceSeries) ? apiData.priceSeries : null);
           setLoading(false);
           return;
         }
@@ -482,6 +521,38 @@ export default function RiskDashboard() {
     return sma > 0 ? data[data.length - 1].price / sma : null;
   }, [data]);
 
+  // Quantile-fan inputs (stable references so the fan only refits on new data)
+  const fanSeries = useMemo(
+    () => priceSeries ?? data.map(d => ({ date: d.date, close: d.price })),
+    [priceSeries, data]
+  );
+  const fanRiskSeries = useMemo(
+    () => data.map(d => ({ date: d.date, risk: d.smoothedRisk })),
+    [data]
+  );
+
+  // Hero mini-fan: last 12 months of the quantile fan. Same deterministic
+  // full-sample fit as the big fan chart (fit is ~60ms, memoized on data).
+  const heroFanYear = useMemo((): FanYearRow[] => {
+    if (fanSeries.length < 300) return [];
+    try {
+      const model = fitQuantileFan(fanSeries.map(s => s.date), fanSeries.map(s => s.close));
+      return fanSeries.slice(-365).map(p => {
+        const [q01, q10, q25, q50, q75, q95, q99] = evaluateFan(model, p.date);
+        return {
+          date: p.date,
+          price: p.close,
+          tauLabel: impliedQuantile(model, p.date, p.close).label,
+          q01, q10, q25, q50, q75, q95, q99,
+          hiBand: [q95, q99] as [number, number],
+          loBand: [q01, q10] as [number, number],
+        };
+      });
+    } catch {
+      return [];
+    }
+  }, [fanSeries]);
+
   if (loading) {
     return (
       <div className="flex h-[600px] items-center justify-center">
@@ -523,6 +594,17 @@ export default function RiskDashboard() {
 
   return (
     <div className="w-full space-y-6">
+      {/* Tab bar — sits above the front-page card */}
+      <TabBar active={activeTab} onChange={setActiveTab} />
+
+      {/* Quantile fan — its own tab */}
+      {activeTab === 'fan' && (
+        <QuantileFanChart series={fanSeries} riskSeries={fanRiskSeries} />
+      )}
+
+      {/* Overview (front page): verdict hero + collapsible breakdown */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
       {/* Verdict-first hero (UI v2) */}
       <VerdictHero
         latest={latestData}
@@ -535,11 +617,17 @@ export default function RiskDashboard() {
         dataSource={dataSource}
         lastUpdated={lastUpdated}
         sma200wRatio={sma200wRatio}
+        fanYear={heroFanYear}
       />
 
-      {/* Why this score — contribution-ordered breakdown with drill-down */}
+      {/* Why this score — collapsible breakdown */}
       <WhyPanel latest={latestData} macroAvailable={macroAvailable} />
+        </div>
+      )}
 
+      {/* Risk metric — its own tab: detailed price/risk chart + components */}
+      {activeTab === 'risk' && (
+        <div className="space-y-6">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4">
         {/* Time range */}
@@ -1209,6 +1297,8 @@ export default function RiskDashboard() {
         anchors use lows that were only confirmable months later. Component weights and
         calibration were tuned on full history (in-sample).
       </p>
+        </div>
+      )}
     </div>
   );
 }
