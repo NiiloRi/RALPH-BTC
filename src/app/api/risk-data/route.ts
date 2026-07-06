@@ -812,6 +812,10 @@ export async function GET() {
         end: priceData[priceData.length - 1]?.date,
       },
       macroDataAvailable: macroBundle !== null,
+      // Full untrimmed close series (no risk-model warm-up cut). The quantile
+      // fan must fit on this: trimming Feb–Oct 2011 (the $32 bubble + crash)
+      // materially flattens the fitted upper tail.
+      priceSeries: priceData.map(d => ({ date: d.date, close: d.close })),
     });
   } catch (error) {
     console.error('Error fetching risk data:', error);
