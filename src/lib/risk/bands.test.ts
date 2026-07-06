@@ -5,6 +5,8 @@ import {
   getRiskBand,
   getRiskAction,
   qualifyAction,
+  bandIndex,
+  combineActions,
 } from './bands';
 import { getRiskLevel } from './model';
 
@@ -96,5 +98,53 @@ describe('qualifyAction', () => {
   it('qualifies medium and low confidence', () => {
     expect(qualifyAction(getRiskAction(0.3), 'medium').qualifier).toContain('medium');
     expect(qualifyAction(getRiskAction(0.3), 'low').qualifier).toContain('low confidence');
+  });
+});
+
+describe('bandIndex', () => {
+  it('is 0 for low risk and 4 for high risk, monotonic', () => {
+    expect(bandIndex(0.05)).toBe(0);
+    expect(bandIndex(0.9)).toBe(4);
+    let prev = -1;
+    for (let r = 0; r <= 1; r += 0.05) {
+      expect(bandIndex(r)).toBeGreaterThanOrEqual(prev);
+      prev = bandIndex(r);
+    }
+  });
+});
+
+describe('combineActions (Layer-0 absolute + Layer-1 adjusted)', () => {
+  it('absolute label stands alone during burn-in (null adjusted)', () => {
+    const c = combineActions(0.45, null);
+    expect(c.text).toBe(getRiskAction(0.45).text);
+    expect(c.leansSuffix).toBeNull();
+    expect(c.divergent).toBe(false);
+    expect(c.bandsApart).toBe(0);
+  });
+
+  it('same band → no suffix, not divergent', () => {
+    const c = combineActions(0.45, 0.42); // both neutral
+    expect(c.bandsApart).toBe(0);
+    expect(c.leansSuffix).toBeNull();
+    expect(c.divergent).toBe(false);
+  });
+
+  it('adjacent band → "leans <adjacent action>" suffix', () => {
+    // absolute 45% (neutral / Hold) vs adjusted 68% (moderate-high / Take Profits)
+    const c = combineActions(0.45, 0.68);
+    expect(c.bandsApart).toBe(1);
+    expect(c.leansSuffix).toBe('leans Take Profits');
+    expect(c.divergent).toBe(false);
+  });
+
+  it('two+ bands apart → divergent', () => {
+    // absolute 45% (neutral) vs adjusted 85% (high)
+    const c = combineActions(0.45, 0.85);
+    expect(c.bandsApart).toBeGreaterThanOrEqual(2);
+    expect(c.divergent).toBe(true);
+  });
+
+  it('primary text always comes from the absolute score', () => {
+    expect(combineActions(0.3, 0.9).text).toBe(getRiskAction(0.3).text);
   });
 });

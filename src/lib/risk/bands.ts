@@ -110,3 +110,48 @@ export function qualifyAction(
   }
   return { text: action.text, qualifier: null };
 }
+
+/** Ordinal position of a band, 0 (low) … 4 (high). */
+export function bandIndex(risk: number): number {
+  const level = getRiskBand(risk).level;
+  return RISK_BANDS.findIndex(b => b.level === level);
+}
+
+export interface CombinedAction {
+  /** Primary action text, from the absolute (Layer-0) score */
+  text: string;
+  /** The absolute action */
+  action: RiskAction;
+  /** "leans <adjacent action>" suffix when the adjusted band is adjacent, else null */
+  leansSuffix: string | null;
+  /** How many bands the adjusted (Layer-1) reading sits from the absolute one */
+  bandsApart: number;
+  /** ≥2 bands apart — the two lenses disagree materially */
+  divergent: boolean;
+}
+
+/**
+ * Combine the absolute (Layer-0) and cycle-adjusted (Layer-1) readings into a
+ * single, honest verdict. The absolute band drives the primary label (it is
+ * the comparable-across-time record); the adjusted band nuances it:
+ *   - same band            → label unchanged
+ *   - adjacent band        → "leans <adjacent action>" suffix
+ *   - ≥2 bands apart        → divergent = true (caller adds a divergence
+ *                            qualifier and caps confidence)
+ * When adjustedRisk is null (burn-in) the absolute label stands alone.
+ */
+export function combineActions(absoluteRisk: number, adjustedRisk: number | null): CombinedAction {
+  const action = getRiskAction(absoluteRisk);
+  if (adjustedRisk === null || !Number.isFinite(adjustedRisk)) {
+    return { text: action.text, action, leansSuffix: null, bandsApart: 0, divergent: false };
+  }
+  const l0 = bandIndex(absoluteRisk);
+  const l1 = bandIndex(adjustedRisk);
+  const bandsApart = Math.abs(l1 - l0);
+
+  let leansSuffix: string | null = null;
+  if (bandsApart === 1) {
+    leansSuffix = `leans ${getRiskBand(adjustedRisk).action}`;
+  }
+  return { text: action.text, action, leansSuffix, bandsApart, divergent: bandsApart >= 2 };
+}

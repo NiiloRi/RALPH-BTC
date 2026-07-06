@@ -22,6 +22,8 @@ import { fitQuantileFan, evaluateFan, impliedQuantile } from '@/lib/quantile-fan
 import WhyPanel from './WhyPanel';
 import QuantileFanChart from './QuantileFanChart';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
+import { calculateAllCycleAdjusted } from '@/lib/adjusted/cycle-adjusted';
+import { classifyDivergence } from '@/lib/adjusted/divergence';
 
 interface UIDataPoint {
   date: string;
@@ -218,6 +220,7 @@ export default function RiskDashboard() {
     enabled: false,
   });
   const [showMetaLayers, setShowMetaLayers] = useState(true);
+  const [showAdjusted, setShowAdjusted] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   // Zoom state
@@ -323,6 +326,34 @@ export default function RiskDashboard() {
   }, []);
 
   // Filter data by time range and risk level
+  // Layer 1 — cycle-adjusted risk series (read-only over the full dataset).
+  // Declared before the chart memos because chartData overlays it.
+  const adjustedSeries = useMemo(() => {
+    if (data.length < 30) return null;
+    return calculateAllCycleAdjusted(
+      data.map(d => ({ date: d.date, smoothedRisk: d.smoothedRisk, components: d.components }))
+    );
+  }, [data]);
+  const latestAdjusted = adjustedSeries ? adjustedSeries[adjustedSeries.length - 1].adjusted : null;
+  const adjustedByDate = useMemo(() => {
+    const m = new Map<string, number>();
+    if (adjustedSeries) for (const r of adjustedSeries) if (r.adjusted !== null) m.set(r.date, r.adjusted);
+    return m;
+  }, [adjustedSeries]);
+
+  // Layer 3 — divergence state for the latest day.
+  const divergence = useMemo(() => {
+    if (data.length === 0) return null;
+    const last = data[data.length - 1];
+    const dataCompleteness = macroAvailable === true ? 1 : 0.86;
+    return classifyDivergence({
+      absolute: last.smoothedRisk,
+      adjusted: latestAdjusted,
+      components: last.components,
+      dataCompleteness,
+    });
+  }, [data, latestAdjusted, macroAvailable]);
+
   const filteredData = useMemo(() => {
     if (data.length === 0) return [];
 
@@ -461,10 +492,11 @@ export default function RiskDashboard() {
         ...d,
         filteredRisk: maskedRisk,
         filteredSmoothedRisk: maskedSmoothedRisk,
+        adjusted: adjustedByDate.get(d.date) ?? null,
         ...(showHeatColors ? { heatColor: getRiskHeatColor(riskValue) } : {}),
       };
     });
-  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter]);
+  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter, adjustedByDate]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -520,6 +552,7 @@ export default function RiskDashboard() {
     const sma = closes.reduce((a, b) => a + b, 0) / closes.length;
     return sma > 0 ? data[data.length - 1].price / sma : null;
   }, [data]);
+
 
   // Quantile-fan inputs (stable references so the fan only refits on new data)
   const fanSeries = useMemo(
@@ -618,6 +651,8 @@ export default function RiskDashboard() {
         lastUpdated={lastUpdated}
         sma200wRatio={sma200wRatio}
         fanYear={heroFanYear}
+        adjusted={latestAdjusted}
+        divergence={divergence}
       />
 
       {/* Why this score — collapsible breakdown */}
@@ -723,6 +758,15 @@ export default function RiskDashboard() {
               className="rounded bg-gray-700 border-gray-600"
             />
             <span className="text-sm text-gray-400">Heat Map</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer" title="Overlay the cycle-adjusted (Layer-1) risk line">
+            <input
+              type="checkbox"
+              checked={showAdjusted}
+              onChange={e => setShowAdjusted(e.target.checked)}
+              className="rounded bg-gray-700 border-gray-600"
+            />
+            <span className="text-sm" style={{ color: showAdjusted ? '#a855f7' : '#9ca3af' }}>Cycle-adjusted</span>
           </label>
         </div>
 
@@ -944,6 +988,20 @@ export default function RiskDashboard() {
                 } : false}
                 isAnimationActive={false}
               />
+
+              {/* Cycle-adjusted (Layer-1) risk overlay — optional, default off */}
+              {showAdjusted && (
+                <Line
+                  yAxisId="risk"
+                  type="monotone"
+                  dataKey="adjusted"
+                  stroke="#a855f7"
+                  strokeWidth={1.5}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+              )}
 
               {/* Zoom selection */}
               {refAreaLeft && refAreaRight && (

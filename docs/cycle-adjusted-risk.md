@@ -332,3 +332,51 @@ scored the last top "Hold." Compression is real (vol 102→45%, Mayer 5.7→1.4,
 band 11.7×→1.6×), the fix is a rank-based adjusted layer with *zero* new tunable
 parameters, and the honest residual limitation is the cycle clock itself, which no
 renormalization can save — it must be named in the UI, not hidden.
+
+---
+
+## 12 · Implementation results (2026-07-06)
+
+Implemented per the plan. Layer 0 frozen (weights/calibration pinned by a guard test).
+New modules: `src/lib/adjusted/{cycle-adjusted,divergence,cycle-extremes}.ts`,
+`src/lib/quantile-fan/expanding.ts`, `scripts/build-fan-history.ts`,
+`src/lib/risk/bands.ts::combineActions`. UI: adjusted chip + second dial needle +
+"Cycle-adjusted" stat-rail row + divergence chip in `VerdictHero`, optional L1 overlay
+toggle on the risk chart. **435 tests pass** (was 370); tsc/eslint/production-build clean.
+Acceptance computed on a committed served-model fixture (`src/lib/adjusted/__fixtures__/
+risk-series.json`, 5,369 days).
+
+### Pre-registered acceptance table — all PASS
+
+| Criterion | Threshold | Measured | Result |
+|---|---|---|---|
+| 2017 top L1 (±60d max) | ≥ 85% | 94.1% | ✅ PASS |
+| 2021 top L1 (±60d max) | ≥ 85% | 92.6% | ✅ PASS |
+| 2025 top L1 vs L0 | ≥ L0 + 10pp | 75.2% vs 59.7% (+15.5pp) | ✅ PASS |
+| 2018 bottom L1 (±60d min) | ≤ 12% | 6.5% | ✅ PASS |
+| 2022 bottom L1 (±60d min) | ≤ 12% | 7.2% | ✅ PASS |
+| Today L1 | ∈ [25%, 50%] | 35.6% | ✅ PASS |
+| Window sensitivity 3y/4y/5y | conclusions hold | tops 91–94%, bottoms 6–7%, today 27–36% | ✅ PASS |
+
+### Cycle-extremes trend (Theil-Sen, n=4)
+
+- Absolute top scale decays **−7.2 pp/cycle** — the structural problem, confirmed.
+- Cycle-adjusted top scale decays **−3.1 pp/cycle** — 57% flatter; the fix works.
+- Absolute bottoms near-flat (−1.8 pp/cycle) — floors barely compress, as predicted.
+
+### Round-2 gate — expanding-window fan τ: **FAILED (as a score input)**
+
+Expanding-window (walk-forward-safe) τ at the four cycle tops: **80.9% / >Q99 / 90.0% /
+76.2%** — NOT consistently ≥ 95%. At the 2025 top the walk-forward τ read only 76%, no
+better than the absolute scale. **Finding: the quantile fan is NOT a reliable
+cycle-adjustment mechanism and must stay contextual only.** The rank-percentile component
+layer (Layer 1) is the correct mechanism. `public/fan_tau_history.json` is cached for
+display use, not fed into any score.
+
+### Known residual limitation (unchanged, documented in UI)
+
+Layer 1 lifts the 2025 top to 75% (from 60%) but not to the ~90% of earlier tops. The
+gap is the **cycle clock** (weight 0.22, kept raw): it read 19% at the actual top and
+82% eighteen months later. No renormalization fixes a broken clock. Round-3 research
+item: price-confirmation gating of the cycle component. Until then the divergence layer
+names the `clock-vs-price` state in the UI rather than hiding it.

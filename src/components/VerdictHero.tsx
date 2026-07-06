@@ -19,9 +19,10 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { getRiskBand, getRiskAction, qualifyAction } from '@/lib/risk/bands';
+import { getRiskBand, getRiskAction, qualifyAction, combineActions } from '@/lib/risk/bands';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
+import type { DivergenceResult } from '@/lib/adjusted/divergence';
 
 export interface HeroDataPoint {
   date: string;
@@ -52,6 +53,10 @@ interface VerdictHeroProps {
   sma200wRatio: number | null;
   /** Trailing ~12 months of the quantile fan (price + Q1..Q99 bands, log) */
   fanYear?: FanYearRow[];
+  /** Layer-1 cycle-adjusted risk for the latest day (null during burn-in) */
+  adjusted?: number | null;
+  /** Layer-3 divergence state for the latest day */
+  divergence?: DivergenceResult | null;
 }
 
 export interface FanYearRow {
@@ -107,10 +112,15 @@ function arcPath(fromDeg: number, toDeg: number, radius: number) {
   return `M ${s.x} ${s.y} A ${radius} ${radius} 0 ${large} 1 ${e.x} ${e.y}`;
 }
 
-function Dial({ value, raw, color, bandLabel }: { value: number; raw: number; color: string; bandLabel: string }) {
+function Dial({ value, raw, color, bandLabel, adjusted }: { value: number; raw: number; color: string; bandLabel: string; adjusted: number | null }) {
   const end = START + SWEEP * Math.max(0, Math.min(1, value));
   const arcLen = ((end - START) / 360) * 2 * Math.PI * R;
   const marker = polar(end, R);
+
+  // Second marker for the cycle-adjusted (Layer-1) reading, on the same dial
+  const adjAngle = adjusted === null ? null : START + SWEEP * Math.max(0, Math.min(1, adjusted));
+  const adjInner = adjAngle === null ? null : polar(adjAngle, R - 11);
+  const adjOuter = adjAngle === null ? null : polar(adjAngle, R + 3);
 
   // Band boundary ticks at 0/20/40/60/80/100
   const ticks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(t => {
@@ -139,7 +149,16 @@ function Dial({ value, raw, color, bandLabel }: { value: number; raw: number; co
           ['--arc-len' as string]: `${arcLen}`,
         }}
       />
-      {/* marker dot */}
+      {/* cycle-adjusted (Layer-1) needle — a violet tick across the arc */}
+      {adjInner && adjOuter && (
+        <line
+          x1={adjInner.x} y1={adjInner.y} x2={adjOuter.x} y2={adjOuter.y}
+          stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round"
+        >
+          <title>Cycle-adjusted risk {(adjusted! * 100).toFixed(1)}%</title>
+        </line>
+      )}
+      {/* marker dot (absolute) */}
       <circle cx={marker.x} cy={marker.y} r="6" fill={color}>
         <animate attributeName="opacity" values="1;0.35;1" dur="2.4s" repeatCount="indefinite" />
       </circle>
@@ -188,7 +207,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
-    fanYear,
+    fanYear, adjusted = null, divergence = null,
   } = props;
 
   // 12-month price range for the mini-fan microlabel
@@ -206,10 +225,14 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const headlineRisk = latest.smoothedRisk;
   const band = getRiskBand(headlineRisk);
   const action = getRiskAction(headlineRisk);
-  const confidenceLevel = meta?.confidence?.level;
+
+  // Combine absolute (Layer-0) with cycle-adjusted (Layer-1) for the verdict.
+  const combined = combineActions(headlineRisk, adjusted);
+  // If the two lenses are ≥2 bands apart, cap displayed confidence at medium.
+  const rawConfidence = meta?.confidence?.level;
+  const confidenceLevel: 'low' | 'medium' | 'high' | undefined =
+    combined.divergent && rawConfidence === 'high' ? 'medium' : rawConfidence;
   const qualified = qualifyAction(action, confidenceLevel);
-  const dispersion = meta?.confidence?.componentDispersion ?? 0;
-  const componentsDisagree = dispersion > 0.25;
 
   const pulls = useMemo(() => computePulls(latest.components), [latest.components]);
   const up = pulls.find(p => p.pull > 0.005);
@@ -257,7 +280,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
       <div className="relative grid grid-cols-1 lg:grid-cols-[auto_1fr_240px] gap-6 lg:gap-10 px-6 pb-7 pt-2 items-center">
         {/* dial */}
         <div className="rise flex justify-center" style={{ animationDelay: '0.05s' }}>
-          <Dial value={headlineRisk} raw={latest.risk} color={band.color} bandLabel={band.label} />
+          <Dial value={headlineRisk} raw={latest.risk} color={band.color} bandLabel={band.label} adjusted={adjusted} />
         </div>
 
         {/* verdict */}
@@ -267,10 +290,31 @@ export default function VerdictHero(props: VerdictHeroProps) {
           </div>
           <h2 className="font-display text-5xl lg:text-6xl leading-[0.95]" style={{ color: band.color }}>
             {qualified.text}
+            {combined.leansSuffix && (
+              <span className="font-display italic text-2xl lg:text-3xl ml-2" style={{ color: 'var(--muted)' }}>
+                · {combined.leansSuffix}
+              </span>
+            )}
           </h2>
           <p className="font-display italic text-lg mt-3" style={{ color: 'var(--muted)' }}>
             {action.desc}.
           </p>
+
+          {/* absolute vs cycle-adjusted readout */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 justify-center lg:justify-start text-[12px]">
+            <span style={{ color: 'var(--muted)' }}>
+              absolute <span style={{ color: band.color }}>{(headlineRisk * 100).toFixed(1)}%</span>
+            </span>
+            {adjusted !== null && (
+              <span
+                className="inline-flex items-center gap-1.5 border rounded-full px-2.5 py-0.5"
+                style={{ color: '#a855f7', borderColor: 'rgba(168,85,247,0.3)' }}
+                title="Cycle-adjusted risk: how extreme today is relative to what this compressed regime can produce"
+              >
+                cycle-adjusted {(adjusted * 100).toFixed(1)}%
+              </span>
+            )}
+          </div>
 
           {/* driver line — why, in one sentence */}
           <p className="text-[12px] mt-4" style={{ color: 'var(--muted)' }}>
@@ -290,11 +334,20 @@ export default function VerdictHero(props: VerdictHeroProps) {
           </p>
 
           {/* warnings appear only when they trigger */}
-          {(qualified.qualifier || componentsDisagree) && (
+          {(qualified.qualifier || (divergence && divergence.state !== 'aligned')) && (
             <div className="flex flex-wrap gap-1.5 mt-4 justify-center lg:justify-start">
               {qualified.qualifier && <Chip tone="warn">⚠ {qualified.qualifier}</Chip>}
-              {componentsDisagree && <Chip tone="alert">⚠ components disagree — read the breakdown below</Chip>}
+              {divergence && divergence.state !== 'aligned' && (
+                <Chip tone={divergence.state === 'layers-diverge' ? 'alert' : 'warn'}>
+                  ⚠ {divergence.actionQualifier ?? divergence.state}
+                </Chip>
+              )}
             </div>
+          )}
+          {divergence && divergence.state !== 'aligned' && (
+            <p className="text-[11px] mt-2 max-w-xl" style={{ color: 'var(--faint)' }}>
+              {divergence.explanation}
+            </p>
           )}
         </div>
 
@@ -318,6 +371,13 @@ export default function VerdictHero(props: VerdictHeroProps) {
           />
           {sma200wRatio !== null && (
             <RailStat label="P / 200W MA" value={`${sma200wRatio.toFixed(2)}×`} sub="long-cycle context" />
+          )}
+          {adjusted !== null && (
+            <RailStat
+              label="Cycle-adjusted"
+              value={<span style={{ color: '#a855f7' }}>{(adjusted * 100).toFixed(1)}%</span>}
+              sub={`${adjusted >= headlineRisk ? '+' : ''}${((adjusted - headlineRisk) * 100).toFixed(1)}pp vs absolute`}
+            />
           )}
           {meta?.confidence && (
             <RailStat
