@@ -59,7 +59,8 @@ interface RiskFilter {
 
 interface TooltipProps {
   active?: boolean;
-  payload?: Array<{ payload: UIDataPoint }>;
+  payload?: Array<{ payload: UIDataPoint & { adjusted?: number | null } }>;
+  showAdjusted?: boolean;
 }
 
 /**
@@ -93,7 +94,7 @@ function getRiskHeatColor(risk: number): string {
   }
 }
 
-function CustomTooltip({ active, payload }: TooltipProps) {
+function CustomTooltip({ active, payload, showAdjusted }: TooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
 
   const point = payload[0].payload;
@@ -116,14 +117,25 @@ function CustomTooltip({ active, payload }: TooltipProps) {
         <span className="text-white font-medium text-right">
           ${point.price.toLocaleString()}
         </span>
-        <span className="text-gray-400">Risk:</span>
-        <span style={{ color: riskColor }} className="font-medium text-right">
-          {(point.risk * 100).toFixed(1)}%
-        </span>
-        <span className="text-gray-400">Smoothed:</span>
-        <span style={{ color: riskColor }} className="text-right">
-          {(point.smoothedRisk * 100).toFixed(1)}%
-        </span>
+        {showAdjusted ? (
+          <>
+            <span className="text-gray-400">Cycle-adjusted:</span>
+            <span style={{ color: '#a855f7' }} className="font-medium text-right">
+              {point.adjusted != null ? `${(point.adjusted * 100).toFixed(1)}%` : 'n/a'}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="text-gray-400">Risk:</span>
+            <span style={{ color: riskColor }} className="font-medium text-right">
+              {(point.risk * 100).toFixed(1)}%
+            </span>
+            <span className="text-gray-400">Smoothed:</span>
+            <span style={{ color: riskColor }} className="text-right">
+              {(point.smoothedRisk * 100).toFixed(1)}%
+            </span>
+          </>
+        )}
         <span className="text-gray-400">Phase:</span>
         <span className="text-gray-300 text-right capitalize">{point.cyclePhase}</span>
       </div>
@@ -470,31 +482,34 @@ export default function RiskDashboard() {
     return `$${price.toFixed(0)}`;
   };
 
-  // Apply extra smoothing if requested
-  const extraSmoothedData = useMemo(() => {
+  // Apply extra smoothing if requested. Carries the cycle-adjusted (Layer-1)
+  // value alongside the absolute risk so both get the same SMA treatment.
+  const extraSmoothedData = useMemo((): (UIDataPoint & { adjusted: number | null })[] => {
     const N = Math.round(smoothingDays);
-    if (N <= 1) return filteredData;
+    const withAdj = filteredData.map(d => ({ ...d, adjusted: adjustedByDate.get(d.date) ?? null }));
+    if (N <= 1) return withAdj;
 
-    // Trailing simple moving average over N days on the risk lines
-    const result: UIDataPoint[] = [];
-    for (let i = 0; i < filteredData.length; i++) {
+    // Trailing simple moving average over N days on the risk lines + adjusted
+    const result: (UIDataPoint & { adjusted: number | null })[] = [];
+    for (let i = 0; i < withAdj.length; i++) {
       const start = Math.max(0, i - N + 1);
-      let sumRisk = 0;
-      let sumSmoothed = 0;
-      let count = 0;
+      let sumRisk = 0, sumSmoothed = 0, sumAdj = 0, adjCount = 0, count = 0;
       for (let k = start; k <= i; k++) {
-        sumRisk += filteredData[k].risk;
-        sumSmoothed += filteredData[k].smoothedRisk;
+        sumRisk += withAdj[k].risk;
+        sumSmoothed += withAdj[k].smoothedRisk;
         count++;
+        const a = withAdj[k].adjusted;
+        if (a !== null) { sumAdj += a; adjCount++; }
       }
       result.push({
-        ...filteredData[i],
+        ...withAdj[i],
         risk: sumRisk / count,
         smoothedRisk: sumSmoothed / count,
+        adjusted: adjCount > 0 ? sumAdj / adjCount : null,
       });
     }
     return result;
-  }, [filteredData, smoothingDays]);
+  }, [filteredData, smoothingDays, adjustedByDate]);
 
   // Build chart data: apply risk filter as null-masking + heat colors
   // This keeps the price line and time axis intact while hiding risk segments
@@ -502,9 +517,10 @@ export default function RiskDashboard() {
     return extraSmoothedData.map(d => {
       const riskValue = showSmoothed ? d.smoothedRisk : d.risk;
 
-      // If risk filter is active, null out risk values outside the range
+      // If risk filter is active, null out values outside the range
       let maskedRisk: number | null = d.risk;
       let maskedSmoothedRisk: number | null = d.smoothedRisk;
+      let maskedAdjusted: number | null = d.adjusted;
 
       if (riskFilter.enabled) {
         const minRisk = riskFilter.min / 100;
@@ -513,17 +529,20 @@ export default function RiskDashboard() {
           maskedRisk = null;
           maskedSmoothedRisk = null;
         }
+        if (d.adjusted !== null && (d.adjusted < minRisk || d.adjusted > maxRisk)) {
+          maskedAdjusted = null;
+        }
       }
 
       return {
         ...d,
         filteredRisk: maskedRisk,
         filteredSmoothedRisk: maskedSmoothedRisk,
-        adjusted: adjustedByDate.get(d.date) ?? null,
+        filteredAdjusted: maskedAdjusted,
         ...(showHeatColors ? { heatColor: getRiskHeatColor(riskValue) } : {}),
       };
     });
-  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter, adjustedByDate]);
+  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -791,7 +810,7 @@ export default function RiskDashboard() {
             />
             <span className="text-sm text-gray-400">Heat Map</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer" title="Overlay the cycle-adjusted (Layer-1) risk line">
+          <label className="flex items-center gap-2 cursor-pointer" title="Replace the legacy risk line with the cycle-adjusted (Layer-1) line">
             <input
               type="checkbox"
               checked={showAdjusted}
@@ -941,19 +960,19 @@ export default function RiskDashboard() {
                 width={40}
               />
 
-              {/* Risk axis (right) */}
+              {/* Risk axis (right) — violet when showing the cycle-adjusted line */}
               <YAxis
                 yAxisId="risk"
                 orientation="right"
                 domain={[0, 1]}
                 tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
-                stroke={showHeatColors ? '#6b7280' : '#dc2626'}
-                tick={{ fill: showHeatColors ? '#9ca3af' : '#dc2626', fontSize: 11 }}
-                tickLine={{ stroke: showHeatColors ? '#4b5563' : '#dc2626' }}
+                stroke={showAdjusted ? '#a855f7' : showHeatColors ? '#6b7280' : '#dc2626'}
+                tick={{ fill: showAdjusted ? '#a855f7' : showHeatColors ? '#9ca3af' : '#dc2626', fontSize: 11 }}
+                tickLine={{ stroke: showAdjusted ? '#a855f7' : showHeatColors ? '#4b5563' : '#dc2626' }}
                 width={34}
               />
 
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip showAdjusted={showAdjusted} />} />
 
               {/* Halving reference lines */}
               {visibleHalvings.map(date => (
@@ -983,8 +1002,9 @@ export default function RiskDashboard() {
                 isAnimationActive={false}
               />
 
-              {/* Risk area - uses filtered keys so segments outside filter are hidden */}
-              {!showHeatColors && (
+              {/* Absolute (legacy) risk area — hidden when the cycle-adjusted
+                  line replaces it */}
+              {!showHeatColors && !showAdjusted && (
                 <Area
                   yAxisId="risk"
                   type="monotone"
@@ -997,39 +1017,41 @@ export default function RiskDashboard() {
                 />
               )}
 
-              {/* Risk line - uses filtered keys; null values create gaps */}
-              <Line
-                yAxisId="risk"
-                type="monotone"
-                dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
-                stroke={showHeatColors ? 'transparent' : '#dc2626'}
-                strokeWidth={1.5}
-                connectNulls={false}
-                dot={showHeatColors ? (props) => {
-                  const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint & { filteredRisk: number | null; filteredSmoothedRisk: number | null } };
-                  if (cx === undefined || cy === undefined || !payload) return null;
-                  const risk = showSmoothed ? payload.filteredSmoothedRisk : payload.filteredRisk;
-                  if (risk === null) return null;
-                  return (
-                    <circle
-                      key={`dot-${cx}-${cy}`}
-                      cx={cx}
-                      cy={cy}
-                      r={3}
-                      fill={getRiskHeatColor(risk)}
-                      stroke="none"
-                    />
-                  );
-                } : false}
-                isAnimationActive={false}
-              />
+              {/* Absolute (legacy) risk line — hidden when cycle-adjusted is on */}
+              {!showAdjusted && (
+                <Line
+                  yAxisId="risk"
+                  type="monotone"
+                  dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
+                  stroke={showHeatColors ? 'transparent' : '#dc2626'}
+                  strokeWidth={1.5}
+                  connectNulls={false}
+                  dot={showHeatColors ? (props) => {
+                    const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint & { filteredRisk: number | null; filteredSmoothedRisk: number | null } };
+                    if (cx === undefined || cy === undefined || !payload) return null;
+                    const risk = showSmoothed ? payload.filteredSmoothedRisk : payload.filteredRisk;
+                    if (risk === null) return null;
+                    return (
+                      <circle
+                        key={`dot-${cx}-${cy}`}
+                        cx={cx}
+                        cy={cy}
+                        r={3}
+                        fill={getRiskHeatColor(risk)}
+                        stroke="none"
+                      />
+                    );
+                  } : false}
+                  isAnimationActive={false}
+                />
+              )}
 
-              {/* Cycle-adjusted (Layer-1) risk overlay — optional, default off */}
+              {/* Cycle-adjusted (Layer-1) risk — REPLACES the legacy line when on */}
               {showAdjusted && (
                 <Line
                   yAxisId="risk"
                   type="monotone"
-                  dataKey="adjusted"
+                  dataKey="filteredAdjusted"
                   stroke="#a855f7"
                   strokeWidth={1.5}
                   dot={false}
