@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Bitcoin">
+  <circle cx="32" cy="32" r="32" fill="#f7931a"/>
+  <g fill="#ffffff" transform="rotate(-11 32 32)">
+    <!-- prongs -->
+    <rect x="27.5" y="11" width="4" height="9" rx="1.2"/>
+    <rect x="35" y="11" width="4" height="9" rx="1.2"/>
+    <rect x="27.5" y="44" width="4" height="9" rx="1.2"/>
+    <rect x="35" y="44" width="4" height="9" rx="1.2"/>
+    <!-- stem -->
+    <rect x="23" y="17" width="7" height="30" rx="1.5"/>
+    <!-- upper bowl -->
+    <path d="M26 17 H37 a7 7 0 0 1 0 14 H26 Z"/>
+    <!-- lower bowl -->
+    <path d="M26 31 H39.5 a8 8 0 0 1 0 16 H26 Z"/>
+  </g>
+  <g fill="#f7931a" transform="rotate(-11 32 32)">
+    <!-- counters (openings) -->
+    <path d="M30.5 21 H36 a3 3 0 0 1 0 6 H30.5 Z"/>
+    <path d="M30.5 35 H37.5 a4 4 0 0 1 0 8 H30.5 Z"/>
+  </g>
+</svg>
