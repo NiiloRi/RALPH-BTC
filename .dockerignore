@@ -1,0 +1,27 @@
+# Build artifacts & deps (rebuilt inside the image)
+node_modules
+.next
+out
+dist
+
+# Local dev / secrets
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+
+# Editor / OS
+.DS_Store
+*.log
+.vscode
+.idea
+
+# Test & tooling noise
+coverage
+.firecrawl
+*.md
+!public/**
+
+# Local scratch data (macro cache is regenerated at runtime)
+data

@@ -1,0 +1,10 @@
+# Append this block to /home/niilo/docker/Caddyfile on the dataniilo server,
+# then reload:  docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+#
+# Caddy provisions the Let's Encrypt TLS cert automatically once
+# btc.dataniilo.fi resolves to the server (DNS A record -> 46.62.204.6).
+# 172.21.0.1 is the Docker bridge gateway (the host, as seen from Caddy).
+
+btc.dataniilo.fi {
+    reverse_proxy 172.21.0.1:3004
+}

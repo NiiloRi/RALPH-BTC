@@ -1,0 +1,24 @@
+# BTC Risk Metric — production compose for the dataniilo server.
+# Host port 3004 (3000-3003 are taken by homegames/fantasy/fantasyv2/cs2);
+# Caddy reverse-proxies btc.dataniilo.fi -> 172.21.0.1:3004.
+services:
+  app:
+    build: .
+    image: btc-risk-metric
+    container_name: btc-risk-metric
+    ports:
+      - "3004:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      # Macro data (M2, Fed Funds, yields). Without it the macro component
+      # degrades to a neutral fallback ("macro n/a"). Set in .env on the server.
+      - FRED_API_KEY=${FRED_API_KEY:-}
+    volumes:
+      # Persist the 7-day FRED macro cache across restarts (optional)
+      - macro-cache:/app/data
+    restart: unless-stopped
+
+volumes:
+  macro-cache:
