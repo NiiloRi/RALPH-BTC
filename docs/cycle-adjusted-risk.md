@@ -377,6 +377,52 @@ display use, not fed into any score.
 
 Layer 1 lifts the 2025 top to 75% (from 60%) but not to the ~90% of earlier tops. The
 gap is the **cycle clock** (weight 0.22, kept raw): it read 19% at the actual top and
-82% eighteen months later. No renormalization fixes a broken clock. Round-3 research
-item: price-confirmation gating of the cycle component. Until then the divergence layer
-names the `clock-vs-price` state in the UI rather than hiding it.
+82% eighteen months later. No renormalization fixes a broken clock. Until round 3 the
+divergence layer names the `clock-vs-price` state in the UI rather than hiding it.
+
+---
+
+## 13 · Round 3 — cycle top-proximity (2026-07-18)
+
+**Question raised:** in late cycle, tell me *when we are near the price top*.
+
+**Finding on price-confirmation gating of the cycle component (the doc's original
+round-3 idea):** it fixes the false alarm but over-corrects.
+- At NOW (price −49% from ATH) the raw cycle reads 83%; gating by
+  `cycle × (1 − drawdown)` drops it to 0–43% — correctly recognizing we are *not*
+  near a top.
+- But hard-gating the cycle inside Layer 1 would drop *today's* cycle-adjusted risk to
+  ~15%, **failing the pre-registered `today ∈ [25%, 50%]` bound**. 15% ("Accumulate")
+  is too bullish: we sit at −49% off the highs, nowhere near the −77…−85% of real
+  bottoms. The cycle's "we are mature" information is real and must not be zeroed.
+- It also does *not* fix the 2025-top under-read (raw cycle 27% → gated 23–26%): that
+  is a separate defect (the top came before the clock's 480-day peak window), not a
+  price-confirmation problem.
+
+**Conclusion — the cycle conflates two things** that decoupled this cycle: *cycle
+maturity* (time since the low — legitimately high now) and *top proximity* (price near
+its highs — ~0 now). Rather than break the cycle component or the frozen base, round 3
+adds a **standalone, read-only Top Proximity signal** (`src/lib/adjusted/top-proximity.ts`):
+
+    priceProx = clamp(1 − drawdownFromATH / 0.35, 0, 1)   // dominant, near-parameter-free
+    season    = clamp(daysSinceLow / 700, 0, 1)            // tops form ≥ ~2y after the low
+    topProximity = priceProx × season                      // walk-forward safe, read-only
+
+Two interpretable parameters, does NOT feed the risk score (it would fire on every
+intermediate ATH). Validation vs the raw cycle clock:
+
+| Date | raw cycle | **Top Proximity** |
+|---|---|---|
+| 2017 top | 79% | **96%** |
+| 2021 top | 77% | **89%** |
+| 2025 top (clock missed) | **27%** | **90%** |
+| 2018 / 2022 bottoms | 0% | **0%** |
+| **NOW (−49% off ATH)** | **83%** | **0%** |
+
+It reads 90% at the actual 2025 top (where the clock read 27%) and 0% now (where the
+clock reads 83%) — exactly the "near the top?" signal requested. **Honest limitation
+(documented in code + UI tooltip):** near *any* ATH in the top half of a cycle it reads
+high; an intermediate ATH (e.g. Dec-2020, 11 months before the Nov-2021 top) is
+indistinguishable in real time from the final one. It measures how top-*like* conditions
+are, not "this is THE top." Surfaced as a "Top proximity" stat-rail row in the verdict
+hero. 10 tests; 445 total pass; tsc/eslint/build clean.

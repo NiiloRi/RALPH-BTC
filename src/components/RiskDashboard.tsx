@@ -24,6 +24,7 @@ import QuantileFanChart from './QuantileFanChart';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import { calculateAllCycleAdjusted } from '@/lib/adjusted/cycle-adjusted';
 import { classifyDivergence } from '@/lib/adjusted/divergence';
+import { calculateAllTopProximity } from '@/lib/adjusted/top-proximity';
 
 interface UIDataPoint {
   date: string;
@@ -341,6 +342,15 @@ export default function RiskDashboard() {
     return m;
   }, [adjustedSeries]);
 
+  // Cycle Top Proximity — "how close are we to a cycle top?" (read-only,
+  // does NOT feed the score). Answers the late-cycle "near the top?" question
+  // that the time-only cycle component cannot.
+  const topProximity = useMemo(() => {
+    if (data.length < 30) return null;
+    const res = calculateAllTopProximity(data.map(d => ({ date: d.date, price: d.price })));
+    return res[res.length - 1];
+  }, [data]);
+
   // Layer 3 — divergence state for the latest day.
   const divergence = useMemo(() => {
     if (data.length === 0) return null;
@@ -653,6 +663,7 @@ export default function RiskDashboard() {
         fanYear={heroFanYear}
         adjusted={latestAdjusted}
         divergence={divergence}
+        topProximity={topProximity}
       />
 
       {/* Why this score — collapsible breakdown */}

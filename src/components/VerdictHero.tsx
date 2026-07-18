@@ -23,6 +23,7 @@ import { getRiskBand, getRiskAction, qualifyAction, combineActions } from '@/lib
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
 import type { DivergenceResult } from '@/lib/adjusted/divergence';
+import { topProximityLabel, type TopProximityResult } from '@/lib/adjusted/top-proximity';
 
 export interface HeroDataPoint {
   date: string;
@@ -57,6 +58,8 @@ interface VerdictHeroProps {
   adjusted?: number | null;
   /** Layer-3 divergence state for the latest day */
   divergence?: DivergenceResult | null;
+  /** Cycle top proximity for the latest day (read-only context) */
+  topProximity?: TopProximityResult | null;
 }
 
 export interface FanYearRow {
@@ -207,7 +210,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
-    fanYear, adjusted = null, divergence = null,
+    fanYear, adjusted = null, divergence = null, topProximity = null,
   } = props;
 
   // 12-month price range for the mini-fan microlabel
@@ -378,6 +381,19 @@ export default function VerdictHero(props: VerdictHeroProps) {
               value={<span style={{ color: '#a855f7' }}>{(adjusted * 100).toFixed(1)}%</span>}
               sub={`${adjusted >= headlineRisk ? '+' : ''}${((adjusted - headlineRisk) * 100).toFixed(1)}pp vs absolute`}
             />
+          )}
+          {topProximity && (
+            <div title="How top-like conditions are: near an all-time high, deep enough into the cycle. Read-only — does not feed the score, and cannot distinguish an intermediate ATH from the final one.">
+              <RailStat
+                label="Top proximity"
+                value={
+                  <span style={{ color: topProximity.value >= 0.6 ? '#dc2626' : topProximity.value >= 0.3 ? '#eab308' : 'var(--muted)' }}>
+                    {(topProximity.value * 100).toFixed(0)}%
+                  </span>
+                }
+                sub={topProximityLabel(topProximity.value)}
+              />
+            </div>
           )}
           {meta?.confidence && (
             <RailStat
