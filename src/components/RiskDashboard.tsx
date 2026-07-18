@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import {
   ComposedChart,
   Line,
@@ -208,11 +208,10 @@ export default function RiskDashboard() {
   const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
   const [priceSeries, setPriceSeries] = useState<{ date: string; close: number }[] | null>(null);
   // Default to the last year on mobile (the full 5000+ day view is illegible
-  // on a phone); desktop shows all history. The "All" range button reveals
-  // everything on any device.
-  const [timeRange, setTimeRange] = useState<TimeRange>(() =>
-    typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? '1y' : 'all'
-  );
+  // on a phone); desktop shows all history. Applied via a matchMedia listener
+  // (robust to load-time viewport timing) until the user picks a range.
+  const [timeRange, setTimeRange] = useState<TimeRange>('all');
+  const userPickedRange = useRef(false);
   const [showSmoothed, setShowSmoothed] = useState(true);
   // Simple moving average (days) applied to the risk line. Default 7d so the
   // curve is legible out of the box; 1 = off. Numeric — replaced the old slider.
@@ -236,6 +235,19 @@ export default function RiskDashboard() {
   const [zoomEnd, setZoomEnd] = useState<number | null>(null);
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
+
+  // Apply the mobile (≤640px) default range of 1Y until the user picks one.
+  // A matchMedia listener re-applies on viewport changes, so it's correct
+  // regardless of when the viewport settles at load.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)');
+    const apply = () => {
+      if (!userPickedRange.current) setTimeRange(mq.matches ? '1y' : 'all');
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
 
   // Load data - fetch fresh from Binance API on every page load
   useEffect(() => {
@@ -688,6 +700,7 @@ export default function RiskDashboard() {
             <button
               key={value}
               onClick={() => {
+                userPickedRange.current = true;
                 setTimeRange(value);
                 resetZoom();
               }}
@@ -702,7 +715,7 @@ export default function RiskDashboard() {
           ))}
           {(timeRange !== 'all' || zoomStart !== null) && (
             <button
-              onClick={() => { setTimeRange('all'); resetZoom(); }}
+              onClick={() => { userPickedRange.current = true; setTimeRange('all'); resetZoom(); }}
               className="rounded px-3 py-1 text-sm font-medium bg-blue-900/40 text-blue-300 hover:bg-blue-900/70 transition-colors"
             >
               Show all data
