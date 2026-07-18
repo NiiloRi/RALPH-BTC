@@ -62,10 +62,22 @@ Then open https://btc.dataniilo.fi.
 
 ## Updating after a push
 
+Use the deploy script — it pulls, rebuilds, restarts, prunes the dangling
+build layers (reclaims disk after each rebuild), and health-checks:
+
+```bash
+ssh dataniilo 'cd ~/btc-risk && ./deploy/update.sh'
+```
+
+It runs `docker image prune -f` (dangling layers only — never `-a`, which
+would delete other apps' images on this shared server). Equivalent manual
+steps:
+
 ```bash
 cd ~/btc-risk
-git pull
+git pull --ff-only
 docker compose up -d --build
+docker image prune -f
 ```
 
 ## Notes
