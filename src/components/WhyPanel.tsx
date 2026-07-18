@@ -75,7 +75,7 @@ export default function WhyPanel({ latest, macroAvailable }: WhyPanelProps) {
   const down = pulls.find(p => p.pull < -0.005);
 
   return (
-    <section className="rounded-2xl border px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       {/* Collapsible header */}
       <button
         onClick={() => setExpanded(v => !v)}

@@ -273,7 +273,7 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
   const posColor = cheap ? '#22c55e' : expensive ? '#dc2626' : 'var(--foreground)';
 
   return (
-    <section className="rounded-2xl border px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       {/* Header */}
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
@@ -332,7 +332,7 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
       </div>
 
       {/* Chart */}
-      <div className="h-[460px] cursor-crosshair select-none">
+      <div className="h-[340px] sm:h-[460px] cursor-crosshair select-none">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={rows}
@@ -346,7 +346,8 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
               tickFormatter={fmtX}
               stroke="#4b5563"
               tick={{ fill: '#8a877f', fontSize: 11 }}
-              interval={Math.max(0, Math.floor(rows.length / 12) - 1)}
+              interval="preserveStartEnd"
+              minTickGap={40}
             />
             <YAxis
               yAxisId="price"

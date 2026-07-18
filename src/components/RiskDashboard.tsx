@@ -173,7 +173,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   return (
-    <div className="flex items-center gap-2" role="tablist" aria-label="Dashboard views">
+    <div className="flex items-center gap-1.5 sm:gap-2" role="tablist" aria-label="Dashboard views">
       {TABS.map(t => {
         const on = t.id === active;
         return (
@@ -182,7 +182,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
             role="tab"
             aria-selected={on}
             onClick={() => onChange(t.id)}
-            className="rounded-xl border px-4 py-2 text-[11px] uppercase tracking-[0.14em] transition-colors"
+            className="flex-1 sm:flex-none rounded-xl border px-2 py-2.5 sm:px-4 sm:py-2 text-[10px] sm:text-[11px] uppercase tracking-[0.1em] sm:tracking-[0.14em] transition-colors"
             style={{
               borderColor: on ? 'var(--muted)' : 'var(--hairline)',
               background: on ? 'rgba(232,230,225,0.05)' : 'transparent',
@@ -675,9 +675,9 @@ export default function RiskDashboard() {
       {activeTab === 'risk' && (
         <div className="space-y-6">
       {/* Controls */}
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         {/* Time range */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-500">Range:</span>
           {timeRangeButtons.map(({ label, value }) => (
             <button
@@ -697,8 +697,8 @@ export default function RiskDashboard() {
           ))}
         </div>
 
-        {/* Toggles */}
-        <div className="flex items-center gap-4 ml-auto">
+        {/* Toggles — wrap into a 2-col grid on mobile so nothing overflows */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:ml-auto w-full sm:w-auto">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -792,7 +792,7 @@ export default function RiskDashboard() {
       </div>
 
       {/* Risk Filter */}
-      <div className="flex flex-wrap items-center gap-4 bg-gray-800/50 rounded-lg p-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4 bg-gray-800/50 rounded-lg p-3">
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -803,7 +803,7 @@ export default function RiskDashboard() {
           <span className="text-sm text-gray-400">Filter by Risk Level</span>
         </label>
 
-        <div className={`flex items-center gap-4 ${!riskFilter.enabled ? 'opacity-50' : ''}`}>
+        <div className={`flex flex-wrap items-center gap-3 sm:gap-4 ${!riskFilter.enabled ? 'opacity-50' : ''}`}>
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Min:</span>
             <input
@@ -839,7 +839,7 @@ export default function RiskDashboard() {
           </div>
 
           {/* Quick presets */}
-          <div className="flex items-center gap-1 ml-2">
+          <div className="flex items-center gap-1 ml-0 sm:ml-2">
             <button
               onClick={() => setRiskFilter({ min: 0, max: 30, enabled: true })}
               disabled={!riskFilter.enabled}
@@ -871,19 +871,19 @@ export default function RiskDashboard() {
         </div>
 
         {riskFilter.enabled && (
-          <span className="text-sm text-gray-400 ml-auto">
+          <span className="text-xs sm:text-sm text-gray-400 sm:ml-auto">
             Highlighting {chartData.filter(d => d.filteredRisk !== null).length} days in {riskFilter.min}-{riskFilter.max}% risk range
           </span>
         )}
       </div>
 
       {/* Main Chart */}
-      <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
-        <div className="h-[500px]">
+      <div className="rounded-lg border border-gray-800 bg-gray-900 p-2 sm:p-4">
+        <div className="h-[360px] sm:h-[500px]">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
-              margin={{ top: 20, right: 60, left: 20, bottom: 20 }}
+              margin={{ top: 20, right: 44, left: 4, bottom: 20 }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
@@ -903,7 +903,8 @@ export default function RiskDashboard() {
                 stroke="#6b7280"
                 tick={{ fill: '#9ca3af', fontSize: 11 }}
                 tickLine={{ stroke: '#4b5563' }}
-                interval={Math.max(0, Math.floor(chartData.length / 10) - 1)}
+                interval="preserveStartEnd"
+                minTickGap={44}
               />
 
               {/* Price axis (left) */}
@@ -1049,7 +1050,7 @@ export default function RiskDashboard() {
       {showComponents && (
         <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
           <h3 className="text-white font-medium mb-4">Risk Components</h3>
-          <div className="h-[300px]">
+          <div className="h-[240px] sm:h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={filteredData}
@@ -1060,7 +1061,8 @@ export default function RiskDashboard() {
                   tickFormatter={formatDate}
                   stroke="#6b7280"
                   tick={{ fill: '#9ca3af', fontSize: 10 }}
-                  interval={Math.max(0, Math.floor(filteredData.length / 8) - 1)}
+                  interval="preserveStartEnd"
+                  minTickGap={44}
                 />
                 <YAxis
                   domain={[0, 1]}
@@ -1162,7 +1164,7 @@ export default function RiskDashboard() {
       {showMacroComponents && (
         <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
           <h3 className="text-white font-medium mb-4">Macro Indicators (0% = Bearish, 100% = Bullish)</h3>
-          <div className="h-[300px]">
+          <div className="h-[240px] sm:h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={filteredData}
@@ -1173,7 +1175,8 @@ export default function RiskDashboard() {
                   tickFormatter={formatDate}
                   stroke="#6b7280"
                   tick={{ fill: '#9ca3af', fontSize: 10 }}
-                  interval={Math.max(0, Math.floor(filteredData.length / 8) - 1)}
+                  interval="preserveStartEnd"
+                  minTickGap={44}
                 />
                 <YAxis
                   domain={[0, 1]}

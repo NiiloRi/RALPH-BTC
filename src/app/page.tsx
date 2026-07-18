@@ -15,18 +15,18 @@ const RiskDashboard = dynamic(() => import('@/components/RiskDashboard'), {
 export default function Home() {
   return (
     <div className="min-h-screen bg-black">
-      <main className="container mx-auto px-4 py-8 max-w-7xl">
-        <header className="mb-8">
-          <div className="flex items-center justify-between">
+      <main className="container mx-auto px-3 sm:px-4 py-6 sm:py-8 max-w-7xl">
+        <header className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h1 className="text-3xl font-bold text-white">BTC Risk Metric</h1>
-              <p className="mt-2 text-gray-400">
+              <h1 className="text-2xl sm:text-3xl font-bold text-white">BTC Risk Metric</h1>
+              <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-gray-400">
                 Cycle-aware Bitcoin risk heuristic — private decision-support tool
               </p>
             </div>
             <Link
               href="/dashboard"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 transition-colors"
+              className="self-start sm:self-auto rounded-lg bg-blue-600 px-4 py-2 text-sm sm:text-base text-white hover:bg-blue-700 transition-colors"
             >
               Open Dashboard
             </Link>

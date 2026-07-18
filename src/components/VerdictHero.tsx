@@ -132,7 +132,7 @@ function Dial({ value, raw, color, bandLabel, adjusted }: { value: number; raw: 
   });
 
   return (
-    <svg viewBox="0 0 220 220" className="w-56 h-56 lg:w-64 lg:h-64" role="img" aria-label={`Risk ${(value * 100).toFixed(1)} percent, ${bandLabel}`}>
+    <svg viewBox="0 0 220 220" className="w-44 h-44 sm:w-56 sm:h-56 lg:w-64 lg:h-64" role="img" aria-label={`Risk ${(value * 100).toFixed(1)} percent, ${bandLabel}`}>
       {/* track */}
       <path d={arcPath(START, START + SWEEP, R)} fill="none" stroke="var(--hairline)" strokeWidth="3" />
       {/* boundary ticks */}
@@ -263,7 +263,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
       />
 
       {/* status line */}
-      <div className="relative flex flex-wrap items-center gap-2 px-6 pt-5">
+      <div className="relative flex flex-wrap items-center gap-2 px-4 sm:px-6 pt-5">
         <span className="text-[11px] tracking-[0.2em] uppercase" style={{ color: 'var(--faint)' }}>
           BTC Risk Metric
         </span>
@@ -280,7 +280,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
         </div>
       </div>
 
-      <div className="relative grid grid-cols-1 lg:grid-cols-[auto_1fr_240px] gap-6 lg:gap-10 px-6 pb-7 pt-2 items-center">
+      <div className="relative grid grid-cols-1 lg:grid-cols-[auto_1fr_240px] gap-6 lg:gap-10 px-4 sm:px-6 pb-7 pt-2 items-center">
         {/* dial */}
         <div className="rise flex justify-center" style={{ animationDelay: '0.05s' }}>
           <Dial value={headlineRisk} raw={latest.risk} color={band.color} bandLabel={band.label} adjusted={adjusted} />
@@ -291,10 +291,10 @@ export default function VerdictHero(props: VerdictHeroProps) {
           <div className="text-[11px] uppercase tracking-[0.22em] mb-2" style={{ color: 'var(--faint)' }}>
             Today&rsquo;s verdict
           </div>
-          <h2 className="font-display text-5xl lg:text-6xl leading-[0.95]" style={{ color: band.color }}>
+          <h2 className="font-display text-4xl sm:text-5xl lg:text-6xl leading-[0.95]" style={{ color: band.color }}>
             {qualified.text}
             {combined.leansSuffix && (
-              <span className="font-display italic text-2xl lg:text-3xl ml-2" style={{ color: 'var(--muted)' }}>
+              <span className="font-display italic text-xl sm:text-2xl lg:text-3xl ml-2" style={{ color: 'var(--muted)' }}>
                 · {combined.leansSuffix}
               </span>
             )}
@@ -410,7 +410,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
       {/* 12-month mini quantile fan: where price sits in the Q1–Q99 bands,
           one glance. Same deterministic full-sample fit as the big fan chart. */}
       {fanYear && fanYear.length >= 30 && (
-        <div className="relative border-t px-6 pt-3 pb-4 rise" style={{ borderColor: 'var(--hairline)', animationDelay: '0.35s' }}>
+        <div className="relative border-t px-4 sm:px-6 pt-3 pb-4 rise" style={{ borderColor: 'var(--hairline)', animationDelay: '0.35s' }}>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
             <span>Quantile fan · last 12 months · log scale</span>
             {yearRange && (
