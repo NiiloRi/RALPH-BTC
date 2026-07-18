@@ -207,9 +207,16 @@ export default function RiskDashboard() {
   const [loadedAtMs, setLoadedAtMs] = useState<number | null>(null);
   const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
   const [priceSeries, setPriceSeries] = useState<{ date: string; close: number }[] | null>(null);
-  const [timeRange, setTimeRange] = useState<TimeRange>('all');
+  // Default to the last year on mobile (the full 5000+ day view is illegible
+  // on a phone); desktop shows all history. The "All" range button reveals
+  // everything on any device.
+  const [timeRange, setTimeRange] = useState<TimeRange>(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? '1y' : 'all'
+  );
   const [showSmoothed, setShowSmoothed] = useState(true);
-  const [smoothingLevel, setSmoothingLevel] = useState(0); // 0 = no extra smoothing, higher = more
+  // Simple moving average (days) applied to the risk line. Default 7d so the
+  // curve is legible out of the box; 1 = off. Numeric — replaced the old slider.
+  const [smoothingDays, setSmoothingDays] = useState(7);
   const [showComponents, setShowComponents] = useState(false);
   const [showMacroComponents, setShowMacroComponents] = useState(false);
   const [showHalvings, setShowHalvings] = useState(true);
@@ -453,31 +460,29 @@ export default function RiskDashboard() {
 
   // Apply extra smoothing if requested
   const extraSmoothedData = useMemo(() => {
-    if (smoothingLevel === 0) return filteredData;
+    const N = Math.round(smoothingDays);
+    if (N <= 1) return filteredData;
 
-    // EMA smoothing: lower alpha = more smoothing
-    // smoothingLevel 1 = alpha 0.2, level 2 = 0.1, level 3 = 0.05, level 4 = 0.02
-    const alphaMap: Record<number, number> = { 1: 0.2, 2: 0.1, 3: 0.05, 4: 0.02 };
-    const alpha = alphaMap[smoothingLevel] || 0.2;
-
+    // Trailing simple moving average over N days on the risk lines
     const result: UIDataPoint[] = [];
-    let prevSmoothed = filteredData[0]?.smoothedRisk || 0.5;
-    let prevRaw = filteredData[0]?.risk || 0.5;
-
-    for (const d of filteredData) {
-      const newSmoothed = alpha * d.smoothedRisk + (1 - alpha) * prevSmoothed;
-      const newRaw = alpha * d.risk + (1 - alpha) * prevRaw;
+    for (let i = 0; i < filteredData.length; i++) {
+      const start = Math.max(0, i - N + 1);
+      let sumRisk = 0;
+      let sumSmoothed = 0;
+      let count = 0;
+      for (let k = start; k <= i; k++) {
+        sumRisk += filteredData[k].risk;
+        sumSmoothed += filteredData[k].smoothedRisk;
+        count++;
+      }
       result.push({
-        ...d,
-        smoothedRisk: newSmoothed,
-        risk: newRaw,
+        ...filteredData[i],
+        risk: sumRisk / count,
+        smoothedRisk: sumSmoothed / count,
       });
-      prevSmoothed = newSmoothed;
-      prevRaw = newRaw;
     }
-
     return result;
-  }, [filteredData, smoothingLevel]);
+  }, [filteredData, smoothingDays]);
 
   // Build chart data: apply risk filter as null-masking + heat colors
   // This keeps the price line and time axis intact while hiding risk segments
@@ -695,6 +700,14 @@ export default function RiskDashboard() {
               {label}
             </button>
           ))}
+          {(timeRange !== 'all' || zoomStart !== null) && (
+            <button
+              onClick={() => { setTimeRange('all'); resetZoom(); }}
+              className="rounded px-3 py-1 text-sm font-medium bg-blue-900/40 text-blue-300 hover:bg-blue-900/70 transition-colors"
+            >
+              Show all data
+            </button>
+          )}
         </div>
 
         {/* Toggles — wrap into a 2-col grid on mobile so nothing overflows */}
@@ -717,22 +730,17 @@ export default function RiskDashboard() {
             />
             <span className="text-sm text-gray-400">Smoothed</span>
           </label>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">EMA:</span>
+          <div className="flex items-center gap-2" title="Simple moving average window (days) on the risk line. 1 = off.">
+            <span className="text-sm text-gray-500">SMA:</span>
             <input
-              type="range"
-              min="0"
-              max="4"
-              value={smoothingLevel}
-              onChange={e => setSmoothingLevel(parseInt(e.target.value))}
-              className="w-20 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              type="number"
+              min="1"
+              max="200"
+              value={smoothingDays}
+              onChange={e => setSmoothingDays(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
+              className="w-14 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
             />
-            <span className="text-xs text-gray-400 w-12">
-              {smoothingLevel === 0 ? 'Off' :
-               smoothingLevel === 1 ? '~5d' :
-               smoothingLevel === 2 ? '~10d' :
-               smoothingLevel === 3 ? '~20d' : '~50d'}
-            </span>
+            <span className="text-xs text-gray-400">{smoothingDays <= 1 ? 'off' : 'd'}</span>
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -878,12 +886,12 @@ export default function RiskDashboard() {
       </div>
 
       {/* Main Chart */}
-      <div className="rounded-lg border border-gray-800 bg-gray-900 p-2 sm:p-4">
+      <div className="rounded-lg border border-gray-800 bg-gray-900 p-1 sm:p-4">
         <div className="h-[360px] sm:h-[500px]">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
-              margin={{ top: 20, right: 44, left: 4, bottom: 20 }}
+              margin={{ top: 16, right: 34, left: 0, bottom: 12 }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
@@ -917,6 +925,7 @@ export default function RiskDashboard() {
                 stroke="#6b7280"
                 tick={{ fill: '#9ca3af', fontSize: 11 }}
                 tickLine={{ stroke: '#4b5563' }}
+                width={40}
               />
 
               {/* Risk axis (right) */}
@@ -928,6 +937,7 @@ export default function RiskDashboard() {
                 stroke={showHeatColors ? '#6b7280' : '#dc2626'}
                 tick={{ fill: showHeatColors ? '#9ca3af' : '#dc2626', fontSize: 11 }}
                 tickLine={{ stroke: showHeatColors ? '#4b5563' : '#dc2626' }}
+                width={34}
               />
 
               <Tooltip content={<CustomTooltip />} />
