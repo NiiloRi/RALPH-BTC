@@ -20,6 +20,11 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { getRiskBand, getRiskAction, qualifyAction, combineActions } from '@/lib/risk/bands';
+import {
+  riskToColor,
+  riskScaleCssGradient,
+  buildRiskGradientStops,
+} from '@/lib/risk/color-scale';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
 import type { DivergenceResult } from '@/lib/adjusted/divergence';
@@ -54,6 +59,8 @@ interface VerdictHeroProps {
   sma200wRatio: number | null;
   /** Trailing ~12 months of the quantile fan (price + Q1..Q99 bands, log) */
   fanYear?: FanYearRow[];
+  /** Trailing ~12 months of price + cycle-adjusted risk for the colored strip */
+  riskYear?: { date: string; price: number; adjusted: number | null }[];
   /** Layer-1 cycle-adjusted risk for the latest day (null during burn-in) */
   adjusted?: number | null;
   /** Layer-3 divergence state for the latest day */
@@ -210,7 +217,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
-    fanYear, adjusted = null, divergence = null, topProximity = null,
+    fanYear, riskYear, adjusted = null, divergence = null, topProximity = null,
   } = props;
 
   // 12-month price range for the mini-fan microlabel
@@ -224,6 +231,16 @@ export default function VerdictHero(props: VerdictHeroProps) {
     }
     return { lo, hi };
   }, [fanYear]);
+
+  // Gradient stops for the 12-month risk-colored price strip (cycle-adjusted
+  // lens; a null adjusted value renders muted gray, never a fake neutral).
+  const heroGradientStops = useMemo(() => {
+    if (!riskYear || riskYear.length < 30) return null;
+    const risks = riskYear.map(d => d.adjusted ?? NaN);
+    return buildRiskGradientStops(risks, {
+      included: i => Number.isFinite(risks[i]),
+    });
+  }, [riskYear]);
 
   const headlineRisk = latest.smoothedRisk;
   const band = getRiskBand(headlineRisk);
@@ -407,6 +424,95 @@ export default function VerdictHero(props: VerdictHeroProps) {
         </div>
       </div>
 
+      {/* 12-month risk-colored price strip — cycle-adjusted lens; sits above
+          the mini fan on the same width and time window. */}
+      {riskYear && riskYear.length >= 30 && heroGradientStops && (
+        <div
+          className="relative border-t px-4 sm:px-6 pt-3 pb-3 rise"
+          style={{ borderColor: 'var(--hairline)', animationDelay: '0.32s' }}
+        >
+          <div
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[10px] uppercase tracking-[0.14em]"
+            style={{ color: 'var(--faint)' }}
+          >
+            <span>Risk-colored price · cycle-adjusted · last 12 months · log scale</span>
+            <span className="ml-auto flex items-center gap-2 normal-case tracking-normal text-[10px]">
+              <span
+                aria-hidden
+                className="inline-block w-14 h-1 rounded-full"
+                style={{ background: riskScaleCssGradient(9) }}
+              />
+              <span style={{ color: 'var(--muted)' }}>low → high risk</span>
+              {adjusted != null && (
+                <span className="tabular-nums" style={{ color: riskToColor(adjusted) }}>
+                  now {(adjusted * 100).toFixed(1)}%
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="h-[110px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={riskYear} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="heroRiskGradient" x1="0" y1="0" x2="1" y2="0">
+                    {heroGradientStops.map((s, i) => (
+                      <stop
+                        key={i}
+                        offset={`${(s.offset * 100).toFixed(3)}%`}
+                        stopColor={s.color}
+                        stopOpacity={s.opacity}
+                      />
+                    ))}
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(d: string) =>
+                    new Date(d).toLocaleDateString('en-US', { month: 'short' })
+                  }
+                  interval={Math.max(0, Math.floor(riskYear.length / 8) - 1)}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#55534d', fontSize: 9 }}
+                  height={14}
+                />
+                <YAxis scale="log" domain={['auto', 'auto']} hide />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const p = payload[0].payload as { date: string; price: number; adjusted: number | null };
+                    return (
+                      <div
+                        className="rounded border px-2.5 py-1.5 text-[10px]"
+                        style={{ borderColor: 'var(--hairline)', background: 'var(--surface)', color: 'var(--muted)' }}
+                      >
+                        <div style={{ color: 'var(--foreground)' }}>
+                          {new Date(p.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </div>
+                        <div style={{ color: '#aab4c4' }}>
+                          ${p.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </div>
+                        <div style={{ color: p.adjusted != null ? riskToColor(p.adjusted) : 'var(--faint)' }}>
+                          {p.adjusted != null ? `adjusted risk ${(p.adjusted * 100).toFixed(1)}%` : 'adjusted n/a'}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                <Line
+                  dataKey="price"
+                  stroke="url(#heroRiskGradient)"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
       {/* 12-month mini quantile fan: where price sits in the Q1–Q99 bands,
           one glance. Same deterministic full-sample fit as the big fan chart. */}
       {fanYear && fanYear.length >= 30 && (
@@ -428,7 +534,8 @@ export default function VerdictHero(props: VerdictHeroProps) {
               <span style={{ color: 'var(--faint)' }}>bands Q1–Q99 · full-sample fit</span>
             </span>
           </div>
-          <div className="h-[130px]">
+          <div className="flex gap-3">
+          <div className="h-[130px] flex-1 min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={fanYear} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
                 <XAxis
@@ -476,6 +583,44 @@ export default function VerdictHero(props: VerdictHeroProps) {
                 <Line dataKey="price" stroke="#60a5fa" strokeWidth={1.5} dot={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
+          </div>
+
+          {/* Today's band values — sorted rail, price slotted into place */}
+          <div
+            className="h-[130px] w-[96px] shrink-0 flex flex-col justify-between py-0.5 text-[10px] tabular-nums"
+            aria-label="Quantile band values today"
+          >
+            {(() => {
+              const last = fanYear[fanYear.length - 1];
+              const fmt = (v: number) =>
+                v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v.toFixed(0)}`;
+              const rows = [
+                { label: 'Q99', value: last.q99, color: '#dc2626' },
+                { label: 'Q95', value: last.q95, color: '#ef4444' },
+                { label: 'Q75', value: last.q75, color: '#f472b6' },
+                { label: 'Q50', value: last.q50, color: '#9ca3af' },
+                { label: 'Q25', value: last.q25, color: '#86efac' },
+                { label: 'Q10', value: last.q10, color: '#22c55e' },
+                { label: 'Q01', value: last.q01, color: '#15803d' },
+                { label: 'price', value: last.price, color: '#60a5fa', bold: true },
+              ].sort((a, b) => b.value - a.value);
+              return rows.map(r => (
+                <div key={r.label} className="flex items-baseline justify-between gap-2 leading-none">
+                  <span style={{ color: r.color, fontWeight: 'bold' in r && r.bold ? 600 : 400 }}>
+                    {r.label}
+                  </span>
+                  <span
+                    style={{
+                      color: 'bold' in r && r.bold ? '#60a5fa' : 'var(--muted)',
+                      fontWeight: 'bold' in r && r.bold ? 600 : 400,
+                    }}
+                  >
+                    {fmt(r.value)}
+                  </span>
+                </div>
+              ));
+            })()}
+          </div>
           </div>
         </div>
       )}

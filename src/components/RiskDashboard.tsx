@@ -812,6 +812,17 @@ export default function RiskDashboard() {
     [data]
   );
 
+  // Hero risk-colored price strip: last 12 months, colored by the
+  // cycle-adjusted (Layer-1) risk — rendered above the hero mini-fan.
+  const heroRiskYear = useMemo(() => {
+    if (data.length < 30) return [];
+    return data.slice(-365).map(d => ({
+      date: d.date,
+      price: d.price,
+      adjusted: adjustedByDate.get(d.date) ?? null,
+    }));
+  }, [data, adjustedByDate]);
+
   // Hero mini-fan: last 12 months of the quantile fan. Same deterministic
   // full-sample fit as the big fan chart (fit is ~60ms, memoized on data).
   const heroFanYear = useMemo((): FanYearRow[] => {
@@ -899,6 +910,7 @@ export default function RiskDashboard() {
         lastUpdated={lastUpdated}
         sma200wRatio={sma200wRatio}
         fanYear={heroFanYear}
+        riskYear={heroRiskYear}
         adjusted={latestAdjusted}
         divergence={divergence}
         topProximity={topProximity}
