@@ -379,6 +379,7 @@ Layer 1 lifts the 2025 top to 75% (from 60%) but not to the ~90% of earlier tops
 gap is the **cycle clock** (weight 0.22, kept raw): it read 19% at the actual top and
 82% eighteen months later. No renormalization fixes a broken clock. Until round 3 the
 divergence layer names the `clock-vs-price` state in the UI rather than hiding it.
+*(Addressed in round 4, §14: the clock is price-confirmed inside Layer 1.)*
 
 ---
 
@@ -426,3 +427,114 @@ high; an intermediate ATH (e.g. Dec-2020, 11 months before the Nov-2021 top) is
 indistinguishable in real time from the final one. It measures how top-*like* conditions
 are, not "this is THE top." Surfaced as a "Top proximity" stat-rail row in the verdict
 hero. 10 tests; 445 total pass; tsc/eslint/build clean.
+
+---
+
+## 14 · Round 4 — price-confirmed cycle in Layer 1 (2026-07-24)
+
+**Question:** close the §12 residual — Layer 1 reads only 75.2% at the 2025 top (vs
+92–94% at earlier tops) and the entire gap is the raw cycle clock (27% at the actual
+top) — without repeating §13's rejected hard gating and without touching frozen Layer 0.
+
+### Design
+
+Replace the raw cycle value **inside Layer 1's recomposition only** with a
+price-confirmed cycle:
+
+    cycleV4(t) = cycle(t) + (1 − cycle(t)) · topProximity(t)     // noisy-OR
+
+Rationale:
+
+- **OR only ever *raises* the clock** when price independently confirms top-like
+  conditions; it never lowers it. Where topProximity = 0 (today at −49% off ATH, every
+  bear market, every bottom window) cycleV4 ≡ cycle and Layer 1 is unchanged — the §13
+  failure mode (hard gating zeroing the maturity information, dropping today's L1 to
+  ~15%) is avoided *structurally*, not by tuning.
+- **Zero new tunable parameters.** Both inputs already exist and were individually
+  validated: the cycle clock (Layer 0, frozen) and Top Proximity (round 3:
+  `priceProx × season`, DD_REF 0.35 / MIN_TOP_DAYS 700). Noisy-OR is the standard
+  combination of two independent evidence sources; it is commutative, monotone in both
+  arguments, ≥ max(c, p), and saturates at 1. (`max(c, p)` is the documented one-line
+  alternative, kept in code as `hardMax`.)
+
+### Scope and invariants
+
+- Input substitution only: `calculateAllCycleAdjusted` is byte-unchanged; Layer 0
+  (model.ts / route.ts / features/cycle.ts, snapshot golden master) untouched.
+- The **divergence classifier keeps consuming the RAW cycle** — its job is precisely to
+  name the clock-vs-price state; feeding it cycleV4 would hide what it exists to show.
+- Round-2 acceptance tests on the core recomposition stay verbatim as regression; the
+  round-4 acceptance below tests the *shipped composition*
+  (`applyPriceConfirmedCycle` → `calculateAllCycleAdjusted`).
+- Walk-forward safe: topProximity uses a causal running ATH; the combine is pointwise;
+  truncation invariance is asserted on the composed pipeline.
+- Fixture provenance: `__fixtures__/risk-series.json` has no price column and is NOT
+  regenerated (that would shift every acceptance number to a new end date). A companion
+  `__fixtures__/price-series.json` (same 5,369 dates, 2011-10-25 → 2026-07-06) is
+  extracted from the live `/api/risk-data` route — the same served-model source the risk
+  fixture declares — via `scripts/export-price-fixture.ts`, which fails loudly on any
+  missing date or non-finite price. A per-index date-equality test keeps the two
+  fixtures from silently drifting apart.
+
+### Pre-registered acceptance (bounds fixed 2026-07-24, BEFORE measurement)
+
+| # | Criterion | Bound |
+|---|---|---|
+| 1 | 2017 top L1v4, max in 2017-10-18..2018-02-15 | ≥ 85% |
+| 2 | 2021 top L1v4, max in 2021-09-11..2022-01-09 | ≥ 85% |
+| 3 | **NEW** 2025 top L1v4, max in 2024-10-15..2025-02-15 | ≥ 85% |
+| 4 | 2018 bottom L1v4, min in 2018-10-16..2019-02-13 | ≤ 12% |
+| 5 | 2022 bottom L1v4, min in 2022-09-22..2023-01-20 | ≤ 12% |
+| 6 | Today's L1v4 (fixture end 2026-07-06) | ∈ [25%, 50%] |
+| 7 | Window sensitivity W ∈ {1095, 1460, 1825} | tops ≥ 80%, bottoms ≤ 15% |
+| 8 | Truncation invariance of the composed pipeline | identical to 12 decimals |
+
+If a criterion fails, it is reported below as a finding — constants (DD_REF,
+MIN_TOP_DAYS, the OR combiner) are NOT adjusted to pass.
+
+### Pre-declared honest cost (measured, NOT bounded)
+
+An intermediate ATH ≥ 700 days after the cycle low is indistinguishable in real time
+from the final top (round 3's documented limitation, inherited here): at **Dec-2020**
+(~745 days after the 2018-12-15 low, 11 months before the real Nov-2021 top) cycleV4
+rises toward ~1.0 early, lifting L1v4 sooner than round 2 did. The measured max cycleV4
+and max L1v4 over 2020-11-01..2021-01-31 are reported in the results below as a finding.
+Early-cycle rallies are protected by the season factor (June-2019: topProximity ≈ 0.05).
+
+### Results (measured 2026-07-24, `cycle-adjusted-v4.test.ts` on the committed fixtures)
+
+**All 8 pre-registered criteria PASS:**
+
+| # | Criterion | Bound | Measured | Result |
+|---|---|---|---|---|
+| 1 | 2017 top L1v4 (±60d max) | ≥ 85% | **95.7%** (round-2: 94.1%) | PASS |
+| 2 | 2021 top L1v4 (±60d max) | ≥ 85% | **94.6%** (round-2: 92.6%) | PASS |
+| 3 | 2025 top L1v4 (±60d max) | ≥ 85% | **91.3%** (round-2: 75.2%, L0: 59.7%) | PASS |
+| 4 | 2018 bottom L1v4 (±60d min) | ≤ 12% | 6.5% (unchanged) | PASS |
+| 5 | 2022 bottom L1v4 (±60d min) | ≤ 12% | 7.2% (unchanged) | PASS |
+| 6 | Today's L1v4 (2026-07-06) | ∈ [25%, 50%] | **35.6%** (unchanged vs round 2) | PASS |
+| 7 | Window sensitivity {3y, 4y, 5y} | tops ≥ 80%, bottoms ≤ 15% | holds incl. 2025 top | PASS |
+| 8 | Truncation invariance (composed) | 12 decimals | holds at 3 cut points | PASS |
+
+The §12 residual is closed: **all four cycle tops now read 91–96%** on the
+cycle-adjusted scale, while bottoms and today are numerically indistinguishable from
+round 2 (topProximity = 0 there, and the OR is an identity at p = 0 — the "unchanged
+where price says no" property is asserted to 1e-3, the EMA's asymptotic tail).
+
+### Findings
+
+- **Dec-2020 intermediate ATH (pre-declared cost, measured):** over
+  2020-11-01..2021-01-31 the raw clock read max 25.2% while cycleV4 saturated at
+  100%. However, round-2 L1 **already read 88.4%** in that window (valuation/momentum
+  percentiles were maxed); v4 lifts it to 96.2% — a marginal +7.8pp on an
+  already-loud reading, not a new false alarm. The limitation stands as documented
+  (an intermediate ATH ≥700d post-low is indistinguishable from the final top in real
+  time), but its practical cost in this model is small because the price-derived
+  components fire there anyway.
+- Implementation: `src/lib/adjusted/price-confirmed-cycle.ts` (noisy-OR `noisyOr`,
+  alternative `hardMax`, series-level `applyPriceConfirmedCycle`), wired in
+  `RiskDashboard.tsx`'s `adjustedSeries` memo. The divergence classifier keeps
+  consuming the RAW cycle. 22 unit + 17 acceptance tests added.
+- Hazard fixed en route: `calculateAllTopProximity` reads drawdown 0 (→ priceProx 1)
+  for a non-finite price once ATH > 0; `applyPriceConfirmedCycle` filters non-finite
+  prices before the pass (regression-tested).

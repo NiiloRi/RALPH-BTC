@@ -18,7 +18,8 @@
     "backtest": "tsx scripts/run-backtest.ts",
     "export:ui": "tsx scripts/export-for-ui.ts",
     "pipeline": "npm run fetch:data && npm run build:features && npm run train:model && npm run backtest && npm run export:ui",
-    "build:fan-history": "tsx scripts/build-fan-history.ts"
+    "build:fan-history": "tsx scripts/build-fan-history.ts",
+    "export:price-fixture": "tsx scripts/export-price-fixture.ts"
   },
   "dependencies": {
     "next": "16.1.1",

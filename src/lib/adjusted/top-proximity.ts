@@ -10,9 +10,12 @@
  *
  * Top Proximity answers that question directly and is dominated by the single
  * most honest fact about a top: at a top, price is AT its all-time high
- * (drawdown ≈ 0). It is a READ-ONLY indicator — it does NOT feed the risk
- * score (doing so would fire on every intermediate ATH, not just the final
- * one). It sits beside the score as decision context.
+ * (drawdown ≈ 0). It never touches the absolute score (Layer 0) — fed raw
+ * into a score it would fire on every intermediate ATH, not just the final
+ * one. Since round 4 it price-confirms the cycle clock inside Layer 1 via
+ * price-confirmed-cycle.ts (noisy-OR — it can only RAISE the clock, and the
+ * intermediate-ATH cost is measured and documented in §14). It also sits
+ * beside the score as decision context.
  *
  *   priceProx = clamp(1 − drawdownFromATH / DD_REF, 0, 1)   // dominant term
  *   season    = clamp(daysSinceLow / MIN_TOP_DAYS, 0, 1)    // tops form ≥~2y

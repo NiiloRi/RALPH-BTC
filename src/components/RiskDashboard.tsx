@@ -23,6 +23,7 @@ import WhyPanel from './WhyPanel';
 import QuantileFanChart from './QuantileFanChart';
 import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import { calculateAllCycleAdjusted } from '@/lib/adjusted/cycle-adjusted';
+import { applyPriceConfirmedCycle } from '@/lib/adjusted/price-confirmed-cycle';
 import { classifyDivergence } from '@/lib/adjusted/divergence';
 import { calculateAllTopProximity } from '@/lib/adjusted/top-proximity';
 
@@ -359,12 +360,16 @@ export default function RiskDashboard() {
 
   // Filter data by time range and risk level
   // Layer 1 — cycle-adjusted risk series (read-only over the full dataset).
+  // Round 4: the cycle clock is price-confirmed (noisy-OR with Top Proximity)
+  // before recomposition — see docs/cycle-adjusted-risk.md §14.
   // Declared before the chart memos because chartData overlays it.
   const adjustedSeries = useMemo(() => {
     if (data.length < 30) return null;
-    return calculateAllCycleAdjusted(
-      data.map(d => ({ date: d.date, smoothedRisk: d.smoothedRisk, components: d.components }))
+    const inputs = applyPriceConfirmedCycle(
+      data.map(d => ({ date: d.date, smoothedRisk: d.smoothedRisk, components: d.components })),
+      data.map(d => ({ date: d.date, price: d.price }))
     );
+    return calculateAllCycleAdjusted(inputs);
   }, [data]);
   const latestAdjusted = adjustedSeries ? adjustedSeries[adjustedSeries.length - 1].adjusted : null;
   const adjustedByDate = useMemo(() => {
@@ -373,9 +378,10 @@ export default function RiskDashboard() {
     return m;
   }, [adjustedSeries]);
 
-  // Cycle Top Proximity — "how close are we to a cycle top?" (read-only,
-  // does NOT feed the score). Answers the late-cycle "near the top?" question
-  // that the time-only cycle component cannot.
+  // Cycle Top Proximity — "how close are we to a cycle top?" Never touches
+  // the absolute score (Layer 0); since round 4 it price-confirms the cycle
+  // clock inside Layer 1 (see adjustedSeries above). Answers the late-cycle
+  // "near the top?" question that the time-only cycle component cannot.
   const topProximity = useMemo(() => {
     if (data.length < 30) return null;
     const res = calculateAllTopProximity(data.map(d => ({ date: d.date, price: d.price })));
@@ -383,6 +389,8 @@ export default function RiskDashboard() {
   }, [data]);
 
   // Layer 3 — divergence state for the latest day.
+  // RAW components on purpose — divergence exists to NAME the clock-vs-price
+  // state; feeding it the price-confirmed cycle would hide what it reports.
   const divergence = useMemo(() => {
     if (data.length === 0) return null;
     const last = data[data.length - 1];

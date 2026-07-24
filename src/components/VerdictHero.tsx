@@ -312,7 +312,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
               <span
                 className="inline-flex items-center gap-1.5 border rounded-full px-2.5 py-0.5"
                 style={{ color: '#a855f7', borderColor: 'rgba(168,85,247,0.3)' }}
-                title="Cycle-adjusted risk: how extreme today is relative to what this compressed regime can produce"
+                title="Cycle-adjusted risk: how extreme today is relative to what this compressed regime can produce; the cycle clock is price-confirmed by top proximity"
               >
                 cycle-adjusted {(adjusted * 100).toFixed(1)}%
               </span>
@@ -383,7 +383,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
             />
           )}
           {topProximity && (
-            <div title="How top-like conditions are: near an all-time high, deep enough into the cycle. Read-only — does not feed the score, and cannot distinguish an intermediate ATH from the final one.">
+            <div title="How top-like conditions are: near an all-time high, deep enough into the cycle. Price-confirms the cycle clock inside the cycle-adjusted layer; never touches the absolute score. Cannot distinguish an intermediate ATH from the final one.">
               <RailStat
                 label="Top proximity"
                 value={
