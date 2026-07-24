@@ -725,22 +725,26 @@ export default function RiskDashboard() {
 
   // Gradient stops for the risk-colored price curve ('colored'/'combined').
   // ALIGNMENT: price and risk are fields of the SAME observation row, so the
-  // color at each point is exactly that day's risk value (the smoothed/raw
-  // choice mirrors the risk series toggle). The gradient interpolates between
-  // adjacent observations only — no lookahead. When the risk filter is on,
-  // out-of-range observations render muted (gray, low opacity) so the
-  // historical trajectory stays intact instead of being cut apart.
+  // color at each point is exactly that day's risk value. The coloring follows
+  // the selected risk LENS: cycle-adjusted (Layer-1) values when that toggle
+  // is on, otherwise the absolute risk (smoothed/raw per its toggle). Burn-in
+  // days with no adjusted value render muted gray — never a fake neutral.
+  // The gradient interpolates between adjacent observations only — no
+  // lookahead. When the risk filter is on, out-of-range observations render
+  // muted so the historical trajectory stays intact instead of being cut.
   const priceGradientStops = useMemo(() => {
     if (chartMode === 'dual' || chartData.length === 0) return null;
-    const risks = chartData.map(d => (showSmoothed ? d.smoothedRisk : d.risk));
-    const included = riskFilter.enabled
-      ? (i: number) => {
-          const r = risks[i];
-          return r >= riskFilter.min / 100 && r <= riskFilter.max / 100;
-        }
-      : undefined;
+    const risks = chartData.map(d =>
+      showAdjusted ? (d.adjusted ?? NaN) : showSmoothed ? d.smoothedRisk : d.risk
+    );
+    const included = (i: number) => {
+      const r = risks[i];
+      if (!Number.isFinite(r)) return false; // adjusted burn-in → muted
+      if (!riskFilter.enabled) return true;
+      return r >= riskFilter.min / 100 && r <= riskFilter.max / 100;
+    };
     return buildRiskGradientStops(risks, { included });
-  }, [chartData, chartMode, showSmoothed, riskFilter]);
+  }, [chartData, chartMode, showSmoothed, showAdjusted, riskFilter]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -1108,7 +1112,7 @@ export default function RiskDashboard() {
                   className="inline-block w-4 h-[3px] rounded"
                   style={{ background: riskScaleCssGradient(9) }}
                 />
-                BTC price · colored by risk · left
+                BTC price · colored by {showAdjusted ? 'cycle-adjusted risk' : 'risk'} · left
               </span>
             )}
             {chartMode !== 'colored' &&
