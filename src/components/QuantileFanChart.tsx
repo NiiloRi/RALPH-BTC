@@ -28,6 +28,7 @@ import {
   YAxis,
   Tooltip,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
 import {
@@ -38,6 +39,9 @@ import {
   WICK_DISLOCATIONS,
   type QuantileFanModel,
 } from '@/lib/quantile-fan/quantile-fan';
+import { NEXT_HALVING_ESTIMATE } from '@/lib/models/s2f';
+import { projectionDates, addDays } from '@/lib/models/projection';
+import { C } from './chart-ui';
 
 interface SeriesPoint {
   date: string;
@@ -147,6 +151,9 @@ function FanTooltip({ active, payload, showWicks }: FanTooltipProps) {
 export default function QuantileFanChart({ series, riskSeries }: QuantileFanChartProps) {
   const [showWicks, setShowWicks] = useState(true);
   const [showRisk, setShowRisk] = useState(false);
+  // Projection: extend the fan curves to the estimated next halving + 6 months
+  // (default off keeps the original 26-week forward extension).
+  const [project, setProject] = useState(false);
 
   // Drag-to-zoom viewport (does NOT refit the model)
   const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
@@ -213,15 +220,27 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
     const lastVisible = visible[visible.length - 1];
     if (out[out.length - 1]?.date !== lastVisible.date) push(lastVisible.date, lastVisible.close);
 
-    // Forward extension (curves only) — full view only
+    // Forward extension (curves only) — full view only. Default: 26 weeks;
+    // projection toggle: to the estimated next halving + 6 months, with the
+    // halving date guaranteed to be a row so its ReferenceLine renders.
     if (!zoom) {
-      const lastMs = new Date(lastVisible.date).getTime();
-      for (let w = 1; w <= 26; w++) {
-        push(new Date(lastMs + w * 7 * 86_400_000).toISOString().split('T')[0]);
+      if (project) {
+        for (const d of projectionDates(
+          lastVisible.date,
+          addDays(NEXT_HALVING_ESTIMATE, 183),
+          [NEXT_HALVING_ESTIMATE]
+        )) {
+          push(d);
+        }
+      } else {
+        const lastMs = new Date(lastVisible.date).getTime();
+        for (let w = 1; w <= 26; w++) {
+          push(new Date(lastMs + w * 7 * 86_400_000).toISOString().split('T')[0]);
+        }
       }
     }
     return out;
-  }, [model, series, zoom, riskByDate]);
+  }, [model, series, zoom, riskByDate, project]);
 
   // Adaptive X labels: months when zoomed tight, years otherwise
   const spanDays = rows.length > 1
@@ -308,6 +327,20 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
           price sits at {pos.label}{cheap ? ' · historically depressed vs trend' : expensive ? ' · historically stretched vs trend' : ''}
         </span>
         <span className="ml-auto flex items-center gap-4">
+          <label
+            className="flex items-center gap-2 cursor-pointer text-[11px]"
+            style={{ color: project ? C.halvingLabel : 'var(--muted)' }}
+            title="Extend the fan curves to the estimated next halving (2028-04-16, block-schedule estimate) plus six months"
+          >
+            <input
+              type="checkbox"
+              checked={project}
+              onChange={e => setProject(e.target.checked)}
+              className="rounded bg-gray-700 border-gray-600"
+              disabled={!!zoom}
+            />
+            project to est. 2028 halving
+          </label>
           {riskSeries && riskSeries.length > 0 && (
             <label className="flex items-center gap-2 cursor-pointer text-[11px]" style={{ color: showRisk ? RISK_COLOR : 'var(--muted)' }}>
               <input
@@ -370,6 +403,16 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
               />
             )}
             <Tooltip content={<FanTooltip showWicks={showWicks} />} />
+
+            {project && !zoom && (
+              <ReferenceLine
+                yAxisId="price"
+                x={NEXT_HALVING_ESTIMATE}
+                stroke={C.halving}
+                strokeDasharray="3 5"
+                label={{ value: 'HALVING · EST', fill: C.halvingLabel, fontSize: 9, position: 'insideTop' }}
+              />
+            )}
 
             {/* soft tail fills */}
             <Area yAxisId="price" dataKey="hiBand" stroke="none" fill="#dc2626" fillOpacity={0.08} isAnimationActive={false} />

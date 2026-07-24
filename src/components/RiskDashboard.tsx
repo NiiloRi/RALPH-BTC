@@ -21,6 +21,7 @@ import {
   riskScaleCssGradient,
   buildRiskGradientStops,
 } from '@/lib/risk/color-scale';
+import { C, Segmented, Toggle } from './chart-ui';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
 import { getRiskBand, RISK_BANDS } from '@/lib/risk/bands';
@@ -33,6 +34,19 @@ import { calculateAllCycleAdjusted } from '@/lib/adjusted/cycle-adjusted';
 import { applyPriceConfirmedCycle } from '@/lib/adjusted/price-confirmed-cycle';
 import { classifyDivergence } from '@/lib/adjusted/divergence';
 import { calculateAllTopProximity } from '@/lib/adjusted/top-proximity';
+import PowerLawChart from './PowerLawChart';
+import S2FChart from './S2FChart';
+import DifficultyChart from './DifficultyChart';
+import { fitPowerLaw, evaluatePowerLaw } from '@/lib/models/power-law';
+import { fitS2F, evaluateS2F } from '@/lib/models/s2f';
+import {
+  joinDifficultyToPrices,
+  fitDifficultyModel,
+  evaluateDifficultyModel,
+} from '@/lib/models/difficulty';
+import type { DifficultyPoint } from '@/lib/data/difficulty-fetcher';
+import type { ModelsYearRow } from './VerdictHero';
+import { type OverviewCardPrefs } from '@/lib/auth/types';
 
 interface UIDataPoint {
   date: string;
@@ -73,21 +87,6 @@ const CHART_MODES: { id: ChartMode; label: string; hint: string }[] = [
   { id: 'combined', label: 'Combined', hint: 'Risk-colored price plus the risk series' },
 ];
 
-/* SVG presentation attributes don't resolve CSS var() — chart colors live here,
-   mirroring the --chart-* tokens in globals.css. Keep the two in sync. */
-const C = {
-  price: '#aab4c4',           // BTC price — desaturated cool blue-gray
-  risk: '#f47c6a',            // risk — warm coral (softer than pure red)
-  riskCombined: 'rgba(244, 124, 106, 0.62)',
-  adjusted: '#a855f7',        // cycle-adjusted (Layer-1) identity color
-  halving: 'rgba(167, 139, 250, 0.38)',
-  halvingLabel: 'rgba(196, 181, 253, 0.75)',
-  grid: 'rgba(232, 230, 225, 0.05)',
-  axisText: '#7d7a73',
-  axisLine: '#2c2c30',
-  brushStroke: '#3a3a40',
-  brushFill: '#141417',
-} as const;
 
 interface RiskFilter {
   min: number;
@@ -211,94 +210,6 @@ function CustomTooltip({ active, payload, showAdjusted }: TooltipProps) {
   );
 }
 
-/* ---- control primitives (presentation only — behavior lives in the caller) ---- */
-
-function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-  ariaLabel,
-}: {
-  options: { value: T; label: string; title?: string }[];
-  value: T;
-  onChange: (v: T) => void;
-  ariaLabel: string;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={ariaLabel}
-      className="inline-flex rounded-md border p-0.5"
-      style={{ borderColor: 'var(--control-border)', background: 'var(--control-bg)' }}
-    >
-      {options.map(o => {
-        const on = o.value === value;
-        return (
-          <button
-            key={o.value}
-            role="radio"
-            aria-checked={on}
-            title={o.title}
-            onClick={() => onChange(o.value)}
-            className="ctl rounded px-2.5 py-1 text-[12px] font-medium transition-colors whitespace-nowrap"
-            style={{
-              background: on ? 'var(--control-bg-active)' : 'transparent',
-              color: on ? 'var(--control-text-active)' : 'var(--control-text)',
-              boxShadow: on ? 'inset 0 0 0 1px rgba(232,230,225,0.14)' : 'none',
-            }}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  title,
-  accent,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  title?: string;
-  accent?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className="ctl flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed"
-      style={{
-        borderColor: checked ? (accent ?? 'rgba(232,230,225,0.22)') : 'var(--control-border)',
-        background: checked ? 'var(--control-bg-active)' : 'var(--control-bg)',
-        color: disabled
-          ? 'var(--faint)'
-          : checked
-            ? (accent ?? 'var(--control-text-active)')
-            : 'var(--control-text)',
-        opacity: disabled ? 0.6 : 1,
-      }}
-    >
-      <span
-        aria-hidden
-        className="inline-block w-1.5 h-1.5 rounded-full transition-colors"
-        style={{ background: checked ? (accent ?? '#e8e6e1') : 'var(--faint)' }}
-      />
-      {label}
-    </button>
-  );
-}
 
 function ComponentsTooltip({ active, payload }: TooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
@@ -332,12 +243,15 @@ function ComponentsTooltip({ active, payload }: TooltipProps) {
   );
 }
 
-type Tab = 'overview' | 'risk' | 'fan';
+type Tab = 'overview' | 'risk' | 'fan' | 'powerlaw' | 's2f' | 'difficulty';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'risk', label: 'Risk metric' },
   { id: 'fan', label: 'Quantile fan' },
+  { id: 'powerlaw', label: 'Power law' },
+  { id: 's2f', label: 'Stock-to-flow' },
+  { id: 'difficulty', label: 'Difficulty' },
 ];
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -376,6 +290,11 @@ export default function RiskDashboard() {
   const [loadedAtMs, setLoadedAtMs] = useState<number | null>(null);
   const [macroAvailable, setMacroAvailable] = useState<boolean | null>(null);
   const [priceSeries, setPriceSeries] = useState<{ date: string; close: number }[] | null>(null);
+  // Network difficulty history (blockchain.info via our cached API route).
+  // Non-blocking: charts and hero minis degrade gracefully while null.
+  const [difficultySeries, setDifficultySeries] = useState<DifficultyPoint[] | null>(null);
+  // Per-user overview-card preferences (null until loaded → hero uses defaults)
+  const [overviewCards, setOverviewCards] = useState<OverviewCardPrefs | null>(null);
   // Default to the last year on mobile (the full 5000+ day view is illegible
   // on a phone); desktop shows all history. Applied via a matchMedia listener
   // (robust to load-time viewport timing) until the user picks a range.
@@ -528,6 +447,40 @@ export default function RiskDashboard() {
     }
 
     loadData();
+  }, []);
+
+  // Per-user card preferences — non-blocking; defaults apply until loaded.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/preferences')
+      .then(res => (res.ok ? res.json() : null))
+      .then(json => {
+        if (!cancelled && json?.overviewCards) setOverviewCards(json.overviewCards);
+      })
+      .catch(() => {
+        /* defaults (all cards visible) apply */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Fire-and-forget difficulty fetch — must never gate the main loading state.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/difficulty')
+      .then(res => (res.ok ? res.json() : null))
+      .then(json => {
+        if (!cancelled && json && Array.isArray(json.points)) {
+          setDifficultySeries(json.points);
+        }
+      })
+      .catch(() => {
+        /* difficulty chart + mini degrade to their absent states */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Filter data by time range and risk level
@@ -823,6 +776,41 @@ export default function RiskDashboard() {
     }));
   }, [data, adjustedByDate]);
 
+  // Hero model minis: 12 months of price vs each valuation model. Full-history
+  // fits (closed-form OLS, microseconds — same refit-duplication pattern as
+  // heroFanYear below). Difficulty stays null until /api/difficulty lands;
+  // the hero renders that cell only when values exist.
+  const heroModelsYear = useMemo((): ModelsYearRow[] => {
+    if (fanSeries.length < 300) return [];
+    try {
+      const dates = fanSeries.map(s => s.date);
+      const closes = fanSeries.map(s => s.close);
+      const pl = fitPowerLaw(dates, closes);
+      const s2fModel = fitS2F(dates, closes);
+      let diffByDate: Map<string, number> | null = null;
+      let dm: ReturnType<typeof fitDifficultyModel> | null = null;
+      if (difficultySeries && difficultySeries.length > 0) {
+        const joined = joinDifficultyToPrices(fanSeries, difficultySeries);
+        if (joined.length >= 100) {
+          dm = fitDifficultyModel(joined);
+          diffByDate = new Map(joined.map(r => [r.date, r.difficulty]));
+        }
+      }
+      return fanSeries.slice(-365).map(p => {
+        const d = diffByDate?.get(p.date);
+        return {
+          date: p.date,
+          price: p.close,
+          powerLaw: evaluatePowerLaw(pl, p.date).fair,
+          s2f: evaluateS2F(s2fModel, p.date),
+          difficulty: dm && d !== undefined ? evaluateDifficultyModel(dm, d) : null,
+        };
+      });
+    } catch {
+      return [];
+    }
+  }, [fanSeries, difficultySeries]);
+
   // Hero mini-fan: last 12 months of the quantile fan. Same deterministic
   // full-sample fit as the big fan chart (fit is ~60ms, memoized on data).
   const heroFanYear = useMemo((): FanYearRow[] => {
@@ -894,6 +882,13 @@ export default function RiskDashboard() {
         <QuantileFanChart series={fanSeries} riskSeries={fanRiskSeries} />
       )}
 
+      {/* Valuation models — own tabs */}
+      {activeTab === 'powerlaw' && <PowerLawChart series={fanSeries} />}
+      {activeTab === 's2f' && <S2FChart series={fanSeries} />}
+      {activeTab === 'difficulty' && (
+        <DifficultyChart series={fanSeries} difficulty={difficultySeries} />
+      )}
+
       {/* Overview (front page): verdict hero + collapsible breakdown */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
@@ -911,6 +906,8 @@ export default function RiskDashboard() {
         sma200wRatio={sma200wRatio}
         fanYear={heroFanYear}
         riskYear={heroRiskYear}
+        modelsYear={heroModelsYear}
+        cards={overviewCards ?? undefined}
         adjusted={latestAdjusted}
         divergence={divergence}
         topProximity={topProximity}

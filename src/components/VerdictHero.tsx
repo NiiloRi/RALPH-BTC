@@ -29,6 +29,7 @@ import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
 import type { DivergenceResult } from '@/lib/adjusted/divergence';
 import { topProximityLabel, type TopProximityResult } from '@/lib/adjusted/top-proximity';
+import { defaultOverviewCards, type OverviewCardPrefs } from '@/lib/auth/types';
 import SharePanel from './SharePanel';
 
 export interface HeroDataPoint {
@@ -62,12 +63,28 @@ interface VerdictHeroProps {
   fanYear?: FanYearRow[];
   /** Trailing ~12 months of price + cycle-adjusted risk for the colored strip */
   riskYear?: { date: string; price: number; adjusted: number | null }[];
+  /** Trailing ~12 months of price + valuation-model values (mini strips) */
+  modelsYear?: ModelsYearRow[];
+  /** Per-user card visibility (main verdict card is always shown) */
+  cards?: OverviewCardPrefs;
   /** Layer-1 cycle-adjusted risk for the latest day (null during burn-in) */
   adjusted?: number | null;
   /** Layer-3 divergence state for the latest day */
   divergence?: DivergenceResult | null;
   /** Cycle top proximity for the latest day (read-only context) */
   topProximity?: TopProximityResult | null;
+}
+
+/** 12 months of price + valuation-model values for the hero mini strips */
+export interface ModelsYearRow {
+  date: string;
+  price: number;
+  /** power-law fair value */
+  powerLaw: number;
+  /** S2F model value */
+  s2f: number;
+  /** difficulty model value — null until /api/difficulty lands */
+  difficulty: number | null;
 }
 
 export interface FanYearRow {
@@ -218,8 +235,9 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
-    fanYear, riskYear, adjusted = null, divergence = null, topProximity = null,
+    fanYear, riskYear, modelsYear, cards: cardsProp, adjusted = null, divergence = null, topProximity = null,
   } = props;
+  const cards = cardsProp ?? defaultOverviewCards();
 
   // 12-month price range for the mini-fan microlabel
   const yearRange = useMemo(() => {
@@ -440,7 +458,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
 
       {/* 12-month risk-colored price strip — cycle-adjusted lens; sits above
           the mini fan on the same width and time window. */}
-      {riskYear && riskYear.length >= 30 && heroGradientStops && (
+      {cards.riskStrip && riskYear && riskYear.length >= 30 && heroGradientStops && (
         <div
           className="relative border-t px-4 sm:px-6 pt-3 pb-3 rise"
           style={{ borderColor: 'var(--hairline)', animationDelay: '0.32s' }}
@@ -529,7 +547,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
 
       {/* 12-month mini quantile fan: where price sits in the Q1–Q99 bands,
           one glance. Same deterministic full-sample fit as the big fan chart. */}
-      {fanYear && fanYear.length >= 30 && (
+      {cards.fan && fanYear && fanYear.length >= 30 && (
         <div className="relative border-t px-4 sm:px-6 pt-3 pb-4 rise" style={{ borderColor: 'var(--hairline)', animationDelay: '0.35s' }}>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
             <span>Quantile fan · last 12 months · log scale</span>
@@ -635,6 +653,77 @@ export default function VerdictHero(props: VerdictHeroProps) {
               ));
             })()}
           </div>
+          </div>
+        </div>
+      )}
+
+      {/* 12-month valuation-model minis: price vs model, one cell per model.
+          The difficulty cell appears only once /api/difficulty has landed.
+          Cells are filtered by the user's card preferences. */}
+      {modelsYear && modelsYear.length >= 30 &&
+        (cards.powerLaw || cards.s2f || cards.difficulty) && (
+        <div
+          className="relative border-t px-4 sm:px-6 pt-3 pb-4 rise"
+          style={{ borderColor: 'var(--hairline)', animationDelay: '0.4s' }}
+        >
+          <div
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2 text-[10px] uppercase tracking-[0.14em]"
+            style={{ color: 'var(--faint)' }}
+          >
+            <span>Valuation models · last 12 months · log scale</span>
+            <span className="ml-auto normal-case tracking-normal">price vs model · in-sample fits</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {(
+              [
+                { key: 'powerLaw', label: 'Power law', color: '#eab308' },
+                { key: 's2f', label: 'Stock-to-flow', color: '#34d399' },
+                { key: 'difficulty', label: 'Difficulty', color: '#f472b6' },
+              ] as const
+            ).map(m => {
+              if (!cards[m.key]) return null; // hidden by user preference
+              const last = modelsYear[modelsYear.length - 1];
+              const lastModel = last[m.key];
+              if (lastModel === null) return null; // difficulty before fetch lands
+              const dev = last.price / lastModel - 1;
+              return (
+                <div key={m.key}>
+                  <div className="flex items-baseline justify-between text-[10px] mb-0.5">
+                    <span className="uppercase tracking-[0.12em]" style={{ color: m.color }}>
+                      {m.label}
+                    </span>
+                    <span className="tabular-nums" style={{ color: dev >= 0 ? '#dc2626' : '#22c55e' }}>
+                      {dev >= 0 ? '+' : ''}
+                      {(dev * 100).toFixed(0)}% vs model
+                    </span>
+                  </div>
+                  <div className="h-[64px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={modelsYear} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                        <YAxis scale="log" domain={['auto', 'auto']} hide />
+                        <XAxis dataKey="date" hide />
+                        <Line
+                          dataKey="price"
+                          stroke="#aab4c4"
+                          strokeOpacity={0.7}
+                          strokeWidth={1.2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          dataKey={m.key}
+                          stroke={m.color}
+                          strokeWidth={1.4}
+                          dot={false}
+                          connectNulls={false}
+                          isAnimationActive={false}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
