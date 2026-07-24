@@ -37,6 +37,7 @@ import { calculateAllTopProximity } from '@/lib/adjusted/top-proximity';
 import PowerLawChart from './PowerLawChart';
 import S2FChart from './S2FChart';
 import DifficultyChart from './DifficultyChart';
+import CycleLowRadarChart from './CycleLowRadarChart';
 import { fitPowerLaw, evaluatePowerLaw } from '@/lib/models/power-law';
 import { fitS2F, evaluateS2F } from '@/lib/models/s2f';
 import {
@@ -243,7 +244,7 @@ function ComponentsTooltip({ active, payload }: TooltipProps) {
   );
 }
 
-type Tab = 'overview' | 'risk' | 'fan' | 'powerlaw' | 's2f' | 'difficulty';
+type Tab = 'overview' | 'risk' | 'fan' | 'powerlaw' | 's2f' | 'difficulty' | 'radar';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -252,6 +253,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'powerlaw', label: 'Power law' },
   { id: 's2f', label: 'Stock-to-flow' },
   { id: 'difficulty', label: 'Difficulty' },
+  { id: 'radar', label: 'Cycle low radar' },
 ];
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -888,6 +890,7 @@ export default function RiskDashboard() {
       {activeTab === 'difficulty' && (
         <DifficultyChart series={fanSeries} difficulty={difficultySeries} />
       )}
+      {activeTab === 'radar' && <CycleLowRadarChart series={fanSeries} />}
 
       {/* Overview (front page): verdict hero + collapsible breakdown */}
       {activeTab === 'overview' && (

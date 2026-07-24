@@ -114,3 +114,22 @@ metric cannot be projected; difficulty deliberately isn't).
   sensitive to the sample start date. Difficulty↔price causality is contested —
   difficulty follows price at least as much as it leads it.
 - Personal decision-support context, not financial advice.
+
+## 4 · Cycle Low Radar (separate tab)
+
+Recreation of the Blockworks "cycle low" condition basket (Luke Leasure /
+@0xMether, Jul 2026) in `src/lib/models/cycle-low-radar.ts` + `/api/radar`:
+
+- **NAS100/BTC & Gold/BTC relative strength**: weekly ratio → 14-week Wilder
+  RSI → 14-week SMA. Readings ≥65–70 are historical tail events (≈6% / <1% of
+  history) characteristic of BTC high-timeframe lows.
+- **Realized price**: BTC spot vs onchain cost basis (bitcoin-data.com; its
+  free tier serves the trailing 4 years — labeled in the UI).
+- **Cycle drawdown clock**: max drawdown by weeks-from-ATH vs the
+  2013/2017/2021 paths; prior troughs were set by week 60.
+- Data: Yahoo Finance (^NDX, GC=F — explicit period1/period2, `range=max`
+  silently coarsens weekly bars to 3-month bars), cached 24h
+  (`data/raw/radar.json`, `RADAR_CACHE_DIR` test override).
+- Limitations surfaced in the UI verbatim from the source report: n ≈ 3–4
+  episodes, signals are not independent (all measure "deep persistent
+  drawdown"), structural change may break every relationship.
