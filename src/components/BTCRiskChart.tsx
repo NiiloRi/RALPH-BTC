@@ -66,6 +66,11 @@ export default function BTCRiskChart() {
     async function loadData() {
       try {
         const response = await fetch('/btc_risk_binance.csv');
+        if (response.status === 401) {
+          // Session expired — re-login instead of parsing a 401 body as CSV.
+          window.location.assign('/login');
+          return;
+        }
         const text = await response.text();
         const lines = text.trim().split('\n');
 

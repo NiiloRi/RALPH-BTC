@@ -15,6 +15,11 @@ services:
       # Macro data (M2, Fed Funds, yields). Without it the macro component
       # degrades to a neutral fallback ("macro n/a"). Set in .env on the server.
       - FRED_API_KEY=${FRED_API_KEY:-}
+      # Auth (see .env.example). :? makes compose fail loudly if the secret is
+      # missing instead of booting an app nobody can log in to.
+      - AUTH_SECRET=${AUTH_SECRET:?AUTH_SECRET required - see .env.example}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-Niilo}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     volumes:
       # Persist the 7-day FRED macro cache across restarts (optional)
       - macro-cache:/app/data

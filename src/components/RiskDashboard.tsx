@@ -291,6 +291,13 @@ export default function RiskDashboard() {
           setLoading(false);
           return;
         }
+
+        // Session expired mid-tab: the static fallbacks would also 401 —
+        // go straight to a clean re-login instead of a confusing error state.
+        if (apiResponse.status === 401) {
+          window.location.assign('/login');
+          return;
+        }
       } catch (apiError) {
         console.warn('API fetch failed, falling back to static data:', apiError);
       }
@@ -304,6 +311,12 @@ export default function RiskDashboard() {
           if (!response.ok) {
             response = await fetch('/btc_risk_binance.csv');
           }
+        }
+
+        if (response.status === 401) {
+          // Session expired (API path timed out first) — clean re-login.
+          window.location.assign('/login');
+          return;
         }
 
         const text = await response.text();

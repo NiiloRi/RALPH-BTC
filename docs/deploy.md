@@ -89,3 +89,17 @@ docker image prune -f
   published port (Next.js standalone otherwise binds locally).
 - If port 3004 is ever taken, change both the compose `ports:` mapping and the Caddy
   `reverse_proxy` target to a free port.
+
+## Authentication
+
+The whole site is behind a login (`src/proxy.ts` gate). Required env vars (server `.env`,
+documented in `.env.example`): `AUTH_SECRET` (>= 32 chars, `openssl rand -hex 32`),
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` (seed a single admin into an empty user store on
+first request; ignored afterwards — change the password at `/account`).
+
+- Users live in `/app/data/auth/users.json` inside the `macro-cache` volume — they
+  survive rebuilds; deleting the volume deletes all accounts (the admin then re-seeds
+  from env = the lockout recovery path).
+- Rotating `AUTH_SECRET` logs every user out (break-glass lever).
+- Self-registered accounts are `pending` until activated at `/admin`.
+- The deploy health check hits `/login` (the root 307s for anonymous requests).

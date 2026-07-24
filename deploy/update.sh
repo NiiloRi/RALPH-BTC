@@ -23,8 +23,10 @@ docker image prune -f
 
 echo "→ health check…"
 sleep 3
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://localhost:3004/ || echo 000)"
-echo "  localhost:3004 → HTTP ${code}"
+# /login, not / — the root now 307s to /login for anonymous requests, and a
+# 200 from /login also proves the auth stack booted (AUTH_SECRET present etc.)
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://localhost:3004/login || echo 000)"
+echo "  localhost:3004/login → HTTP ${code}"
 [ "${code}" = "200" ] || { echo "⚠ health check failed — check: docker logs btc-risk-metric"; exit 1; }
 
 echo "✓ deployed"
