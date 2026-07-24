@@ -10,6 +10,27 @@
   --hairline: rgba(232, 230, 225, 0.08);
   /* Band accent — set inline per risk state by components */
   --accent: #eab308;
+
+  /* ---- chart tokens (risk-metric workspace) ---- */
+  --surface-raised: #141417;          /* chart card above the page background */
+  --chart-price: #aab4c4;             /* BTC price — desaturated cool blue-gray */
+  --chart-price-dim: rgba(170, 180, 196, 0.55);
+  --chart-risk: #f47c6a;              /* risk line — warm coral, not pure red */
+  --chart-risk-soft: rgba(244, 124, 106, 0.16);
+  --chart-adjusted: #a855f7;          /* cycle-adjusted (Layer-1) — existing identity */
+  --chart-halving: rgba(167, 139, 250, 0.38);
+  --chart-halving-label: rgba(196, 181, 253, 0.75);
+  --chart-grid: rgba(232, 230, 225, 0.05);
+  --chart-axis-text: #7d7a73;
+
+  /* ---- control tokens ---- */
+  --control-bg: rgba(232, 230, 225, 0.04);
+  --control-bg-hover: rgba(232, 230, 225, 0.08);
+  --control-bg-active: rgba(232, 230, 225, 0.12);
+  --control-border: rgba(232, 230, 225, 0.1);
+  --control-text: #b5b2aa;
+  --control-text-active: #e8e6e1;
+  --focus-ring: rgba(234, 179, 8, 0.55);
 }
 
 @theme inline {
@@ -62,4 +83,19 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .rise, .draw { animation: none; opacity: 1; }
+}
+
+/* ---- UI label voice: section/control labels (numerals stay tabular mono) ---- */
+.ui-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+  user-select: none;
+}
+
+/* Visible keyboard focus for all chart controls */
+.ctl:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }

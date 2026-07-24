@@ -12,8 +12,15 @@ import {
   ReferenceLine,
   Brush,
   ReferenceArea,
+  CartesianGrid,
 } from 'recharts';
 import { HALVING_DATES } from '@/lib/types';
+import {
+  riskToColor,
+  riskCategory,
+  riskScaleCssGradient,
+  buildRiskGradientStops,
+} from '@/lib/risk/color-scale';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
 import { getRiskBand, RISK_BANDS } from '@/lib/risk/bands';
@@ -52,6 +59,36 @@ interface UIDataPoint {
 
 type TimeRange = 'all' | '1y' | '2y' | '3y' | '5y' | 'ytd';
 
+/**
+ * Chart display modes. 'colored' and 'combined' render the BTC price curve
+ * with a per-observation risk-colored gradient (shared scale in
+ * lib/risk/color-scale). This system SUPERSEDES the old "Heat Map" checkbox,
+ * which drew the risk line as thousands of individual colored dots.
+ */
+type ChartMode = 'dual' | 'colored' | 'combined';
+
+const CHART_MODES: { id: ChartMode; label: string; hint: string }[] = [
+  { id: 'dual', label: 'Price + Risk', hint: 'BTC price with a separate risk series' },
+  { id: 'colored', label: 'Risk-colored', hint: 'BTC price curve colored by its risk value' },
+  { id: 'combined', label: 'Combined', hint: 'Risk-colored price plus the risk series' },
+];
+
+/* SVG presentation attributes don't resolve CSS var() — chart colors live here,
+   mirroring the --chart-* tokens in globals.css. Keep the two in sync. */
+const C = {
+  price: '#aab4c4',           // BTC price — desaturated cool blue-gray
+  risk: '#f47c6a',            // risk — warm coral (softer than pure red)
+  riskCombined: 'rgba(244, 124, 106, 0.62)',
+  adjusted: '#a855f7',        // cycle-adjusted (Layer-1) identity color
+  halving: 'rgba(167, 139, 250, 0.38)',
+  halvingLabel: 'rgba(196, 181, 253, 0.75)',
+  grid: 'rgba(232, 230, 225, 0.05)',
+  axisText: '#7d7a73',
+  axisLine: '#2c2c30',
+  brushStroke: '#3a3a40',
+  brushFill: '#141417',
+} as const;
+
 interface RiskFilter {
   min: number;
   max: number;
@@ -64,83 +101,202 @@ interface TooltipProps {
   showAdjusted?: boolean;
 }
 
-/**
- * Get color from dark blue (low risk) to bright red (high risk)
- */
-function getRiskHeatColor(risk: number): string {
-  // Clamp risk between 0 and 1
-  const r = Math.max(0, Math.min(1, risk));
-
-  // Color stops: dark blue -> cyan -> green -> yellow -> orange -> red
-  if (r < 0.2) {
-    // Dark blue to cyan (0-20%)
-    const t = r / 0.2;
-    return `rgb(${Math.round(30 + t * 0)}, ${Math.round(60 + t * 140)}, ${Math.round(180 + t * 75)})`;
-  } else if (r < 0.4) {
-    // Cyan to green (20-40%)
-    const t = (r - 0.2) / 0.2;
-    return `rgb(${Math.round(30 + t * 70)}, ${Math.round(200 - t * 20)}, ${Math.round(255 - t * 175)})`;
-  } else if (r < 0.6) {
-    // Green to yellow (40-60%)
-    const t = (r - 0.4) / 0.2;
-    return `rgb(${Math.round(100 + t * 155)}, ${Math.round(180 + t * 20)}, ${Math.round(80 - t * 60)})`;
-  } else if (r < 0.8) {
-    // Yellow to orange (60-80%)
-    const t = (r - 0.6) / 0.2;
-    return `rgb(${Math.round(255)}, ${Math.round(200 - t * 100)}, ${Math.round(20)})`;
-  } else {
-    // Orange to bright red (80-100%)
-    const t = (r - 0.8) / 0.2;
-    return `rgb(${Math.round(255 - t * 35)}, ${Math.round(100 - t * 70)}, ${Math.round(20 + t * 10)})`;
+/** Nearest halving within ±14 days of the given date, or null. */
+function nearestHalvingContext(date: string): string | null {
+  const t = new Date(date).getTime();
+  for (const h of HALVING_DATES) {
+    const diff = Math.round((t - h.getTime()) / 86400000);
+    if (Math.abs(diff) <= 14) {
+      if (diff === 0) return 'Halving day';
+      return diff > 0 ? `${diff}d after halving` : `${-diff}d before halving`;
+    }
   }
+  return null;
+}
+
+function TooltipRow({
+  label,
+  value,
+  swatch,
+  valueColor,
+}: {
+  label: string;
+  value: string;
+  swatch?: string;
+  valueColor?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-6 text-[12px] leading-5">
+      <span className="flex items-center gap-1.5" style={{ color: 'var(--muted)' }}>
+        {swatch && (
+          <span
+            aria-hidden
+            className="inline-block w-2 h-2 rounded-[2px]"
+            style={{ background: swatch }}
+          />
+        )}
+        {label}
+      </span>
+      <span className="font-medium tabular-nums" style={{ color: valueColor ?? 'var(--foreground)' }}>
+        {value}
+      </span>
+    </div>
+  );
 }
 
 function CustomTooltip({ active, payload, showAdjusted }: TooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
 
   const point = payload[0].payload;
-  const riskColor =
-    point.risk < 0.3 ? '#22c55e' :
-    point.risk < 0.5 ? '#eab308' :
-    point.risk < 0.7 ? '#f97316' : '#dc2626';
+  const cat = riskCategory(point.smoothedRisk);
+  const halvingCtx = nearestHalvingContext(point.date);
 
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-900 p-3 shadow-lg min-w-[200px]">
-      <p className="font-medium text-white mb-2">
-        {new Date(point.date).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-        })}
-      </p>
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        <span className="text-gray-400">Price:</span>
-        <span className="text-white font-medium text-right">
-          ${point.price.toLocaleString()}
+    <div
+      className="rounded-md border p-3 shadow-xl min-w-[210px]"
+      style={{ background: 'rgba(16,16,19,0.96)', borderColor: 'var(--hairline)' }}
+    >
+      <div className="flex items-center justify-between gap-4 mb-2">
+        <p className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+          {new Date(point.date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })}
+        </p>
+        <span
+          className="rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider whitespace-nowrap"
+          style={{ background: `${cat.color}22`, color: cat.color }}
+        >
+          {cat.label}
         </span>
-        {showAdjusted ? (
-          <>
-            <span className="text-gray-400">Cycle-adjusted:</span>
-            <span style={{ color: '#a855f7' }} className="font-medium text-right">
-              {point.adjusted != null ? `${(point.adjusted * 100).toFixed(1)}%` : 'n/a'}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="text-gray-400">Risk:</span>
-            <span style={{ color: riskColor }} className="font-medium text-right">
-              {(point.risk * 100).toFixed(1)}%
-            </span>
-            <span className="text-gray-400">Smoothed:</span>
-            <span style={{ color: riskColor }} className="text-right">
-              {(point.smoothedRisk * 100).toFixed(1)}%
-            </span>
-          </>
-        )}
-        <span className="text-gray-400">Phase:</span>
-        <span className="text-gray-300 text-right capitalize">{point.cyclePhase}</span>
       </div>
+      <div className="space-y-0.5">
+        <TooltipRow
+          label="BTC price"
+          value={`$${point.price.toLocaleString(undefined, { maximumFractionDigits: point.price < 10 ? 2 : 0 })}`}
+          swatch={C.price}
+        />
+        <TooltipRow
+          label="Risk"
+          value={`${(point.risk * 100).toFixed(1)}%`}
+          swatch={riskToColor(point.risk)}
+          valueColor={riskToColor(point.risk)}
+        />
+        <TooltipRow
+          label="Smoothed"
+          value={`${(point.smoothedRisk * 100).toFixed(1)}%`}
+          swatch={riskToColor(point.smoothedRisk)}
+          valueColor={riskToColor(point.smoothedRisk)}
+        />
+        {showAdjusted && (
+          <TooltipRow
+            label="Cycle-adjusted"
+            value={point.adjusted != null ? `${(point.adjusted * 100).toFixed(1)}%` : 'n/a'}
+            swatch={C.adjusted}
+            valueColor={C.adjusted}
+          />
+        )}
+        <TooltipRow label="Phase" value={point.cyclePhase} />
+      </div>
+      {halvingCtx && (
+        <p
+          className="mt-2 pt-1.5 border-t text-[10px] uppercase tracking-wider"
+          style={{ borderColor: 'var(--hairline)', color: C.halvingLabel }}
+        >
+          {halvingCtx}
+        </p>
+      )}
     </div>
+  );
+}
+
+/* ---- control primitives (presentation only — behavior lives in the caller) ---- */
+
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: { value: T; label: string; title?: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex rounded-md border p-0.5"
+      style={{ borderColor: 'var(--control-border)', background: 'var(--control-bg)' }}
+    >
+      {options.map(o => {
+        const on = o.value === value;
+        return (
+          <button
+            key={o.value}
+            role="radio"
+            aria-checked={on}
+            title={o.title}
+            onClick={() => onChange(o.value)}
+            className="ctl rounded px-2.5 py-1 text-[12px] font-medium transition-colors whitespace-nowrap"
+            style={{
+              background: on ? 'var(--control-bg-active)' : 'transparent',
+              color: on ? 'var(--control-text-active)' : 'var(--control-text)',
+              boxShadow: on ? 'inset 0 0 0 1px rgba(232,230,225,0.14)' : 'none',
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  title,
+  accent,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  title?: string;
+  accent?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={title}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="ctl flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed"
+      style={{
+        borderColor: checked ? (accent ?? 'rgba(232,230,225,0.22)') : 'var(--control-border)',
+        background: checked ? 'var(--control-bg-active)' : 'var(--control-bg)',
+        color: disabled
+          ? 'var(--faint)'
+          : checked
+            ? (accent ?? 'var(--control-text-active)')
+            : 'var(--control-text)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <span
+        aria-hidden
+        className="inline-block w-1.5 h-1.5 rounded-full transition-colors"
+        style={{ background: checked ? (accent ?? '#e8e6e1') : 'var(--faint)' }}
+      />
+      {label}
+    </button>
   );
 }
 
@@ -233,7 +389,10 @@ export default function RiskDashboard() {
   const [showMacroComponents, setShowMacroComponents] = useState(false);
   const [showHalvings, setShowHalvings] = useState(true);
   const [logScale, setLogScale] = useState(true);
-  const [showHeatColors, setShowHeatColors] = useState(false);
+  // Chart display mode — supersedes the old "Heat Map" checkbox (which drew
+  // the risk line as per-point dots); risk-by-color now lives on the price
+  // curve itself in 'colored'/'combined' modes.
+  const [chartMode, setChartMode] = useState<ChartMode>('dual');
   const [riskFilter, setRiskFilter] = useState<RiskFilter>({
     min: 0,
     max: 100,
@@ -532,7 +691,7 @@ export default function RiskDashboard() {
     return result;
   }, [filteredData, smoothingDays, adjustedByDate]);
 
-  // Build chart data: apply risk filter as null-masking + heat colors
+  // Build chart data: apply risk filter as null-masking.
   // This keeps the price line and time axis intact while hiding risk segments
   const chartData = useMemo(() => {
     return extraSmoothedData.map(d => {
@@ -560,10 +719,28 @@ export default function RiskDashboard() {
         filteredRisk: maskedRisk,
         filteredSmoothedRisk: maskedSmoothedRisk,
         filteredAdjusted: maskedAdjusted,
-        ...(showHeatColors ? { heatColor: getRiskHeatColor(riskValue) } : {}),
       };
     });
-  }, [extraSmoothedData, showHeatColors, showSmoothed, riskFilter]);
+  }, [extraSmoothedData, showSmoothed, riskFilter]);
+
+  // Gradient stops for the risk-colored price curve ('colored'/'combined').
+  // ALIGNMENT: price and risk are fields of the SAME observation row, so the
+  // color at each point is exactly that day's risk value (the smoothed/raw
+  // choice mirrors the risk series toggle). The gradient interpolates between
+  // adjacent observations only — no lookahead. When the risk filter is on,
+  // out-of-range observations render muted (gray, low opacity) so the
+  // historical trajectory stays intact instead of being cut apart.
+  const priceGradientStops = useMemo(() => {
+    if (chartMode === 'dual' || chartData.length === 0) return null;
+    const risks = chartData.map(d => (showSmoothed ? d.smoothedRisk : d.risk));
+    const included = riskFilter.enabled
+      ? (i: number) => {
+          const r = risks[i];
+          return r >= riskFilter.min / 100 && r <= riskFilter.max / 100;
+        }
+      : undefined;
+    return buildRiskGradientStops(risks, { included });
+  }, [chartData, chartMode, showSmoothed, riskFilter]);
 
   // Get halving dates within visible range
   const visibleHalvings = useMemo(() => {
@@ -731,200 +908,164 @@ export default function RiskDashboard() {
       {/* Risk metric — its own tab: detailed price/risk chart + components */}
       {activeTab === 'risk' && (
         <div className="space-y-6">
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-        {/* Time range */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-gray-500">Range:</span>
-          {timeRangeButtons.map(({ label, value }) => (
-            <button
-              key={value}
-              onClick={() => {
+      {/* Controls — primary row: range + display mode; secondary row: grouped toggles */}
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex items-center gap-2">
+            <span className="ui-label">Range</span>
+            <Segmented
+              ariaLabel="Time range"
+              options={timeRangeButtons.map(b => ({ value: b.value, label: b.label }))}
+              value={zoomStart === null ? timeRange : ('zoom' as TimeRange)}
+              onChange={v => {
                 userPickedRange.current = true;
-                setTimeRange(value);
+                setTimeRange(v);
                 resetZoom();
               }}
-              className={`rounded px-3 py-1 text-sm font-medium transition-colors ${
-                timeRange === value && zoomStart === null
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-          {(timeRange !== 'all' || zoomStart !== null) && (
-            <button
-              onClick={() => { userPickedRange.current = true; setTimeRange('all'); resetZoom(); }}
-              className="rounded px-3 py-1 text-sm font-medium bg-blue-900/40 text-blue-300 hover:bg-blue-900/70 transition-colors"
-            >
-              Show all data
-            </button>
-          )}
-        </div>
-
-        {/* Toggles — wrap into a 2-col grid on mobile so nothing overflows */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:ml-auto w-full sm:w-auto">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={logScale}
-              onChange={e => setLogScale(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
             />
-            <span className="text-sm text-gray-400">Log Scale</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showSmoothed}
-              onChange={e => setShowSmoothed(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
-            />
-            <span className="text-sm text-gray-400">Smoothed</span>
-          </label>
-          <div className="flex items-center gap-2" title="Simple moving average window (days) on the risk line. 1 = off.">
-            <span className="text-sm text-gray-500">SMA:</span>
-            <input
-              type="number"
-              min="1"
-              max="200"
-              value={smoothingDays}
-              onChange={e => setSmoothingDays(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
-              className="w-14 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
-            />
-            <span className="text-xs text-gray-400">{smoothingDays <= 1 ? 'off' : 'd'}</span>
+            {zoomStart !== null && (
+              <button
+                onClick={resetZoom}
+                className="ctl rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors"
+                style={{
+                  borderColor: 'rgba(234,179,8,0.4)',
+                  background: 'rgba(234,179,8,0.08)',
+                  color: 'var(--accent)',
+                }}
+              >
+                Reset zoom
+              </button>
+            )}
           </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showHalvings}
-              onChange={e => setShowHalvings(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
+
+          <div className="flex items-center gap-2">
+            <span className="ui-label">Mode</span>
+            <Segmented
+              ariaLabel="Chart mode"
+              options={CHART_MODES.map(m => ({ value: m.id, label: m.label, title: m.hint }))}
+              value={chartMode}
+              onChange={setChartMode}
             />
-            <span className="text-sm text-gray-400">Halvings</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showComponents}
-              onChange={e => setShowComponents(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
-            />
-            <span className="text-sm text-gray-400">Components</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showMacroComponents}
-              onChange={e => setShowMacroComponents(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
-            />
-            <span className="text-sm text-gray-400">Macro Details</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showHeatColors}
-              onChange={e => setShowHeatColors(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
-            />
-            <span className="text-sm text-gray-400">Heat Map</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer" title="Replace the legacy risk line with the cycle-adjusted (Layer-1) line">
-            <input
-              type="checkbox"
-              checked={showAdjusted}
-              onChange={e => setShowAdjusted(e.target.checked)}
-              className="rounded bg-gray-700 border-gray-600"
-            />
-            <span className="text-sm" style={{ color: showAdjusted ? '#a855f7' : '#9ca3af' }}>Cycle-adjusted</span>
-          </label>
+          </div>
         </div>
 
-        {zoomStart !== null && (
-          <button
-            onClick={resetZoom}
-            className="rounded bg-gray-700 px-3 py-1 text-sm font-medium text-white hover:bg-gray-600"
-          >
-            Reset Zoom
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="ui-label">Display</span>
+            <Toggle checked={logScale} onChange={setLogScale} label="Log scale" />
+            <Toggle checked={showHalvings} onChange={setShowHalvings} label="Halvings" />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="ui-label">Risk model</span>
+            <Toggle checked={showSmoothed} onChange={setShowSmoothed} label="Smoothed" />
+            <div
+              className="flex items-center gap-1.5 rounded-md border px-2 py-1"
+              style={{ borderColor: 'var(--control-border)', background: 'var(--control-bg)' }}
+              title="Simple moving average window (days) on the risk line. 1 = off."
+            >
+              <span className="text-[12px]" style={{ color: 'var(--control-text)' }}>SMA</span>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={smoothingDays}
+                aria-label="Risk SMA window in days"
+                onChange={e => setSmoothingDays(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))}
+                className="ctl w-11 bg-transparent text-[12px] tabular-nums outline-none"
+                style={{ color: 'var(--control-text-active)' }}
+              />
+              <span className="text-[10px]" style={{ color: 'var(--faint)' }}>
+                {smoothingDays <= 1 ? 'off' : 'd'}
+              </span>
+            </div>
+            <Toggle
+              checked={showAdjusted}
+              onChange={setShowAdjusted}
+              label="Cycle-adjusted"
+              accent={C.adjusted}
+              title="Replace the legacy risk line with the cycle-adjusted (Layer-1) line"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="ui-label">Overlays</span>
+            <Toggle checked={showComponents} onChange={setShowComponents} label="Components" />
+            <Toggle checked={showMacroComponents} onChange={setShowMacroComponents} label="Macro details" />
+          </div>
+        </div>
       </div>
 
-      {/* Risk Filter */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4 bg-gray-800/50 rounded-lg p-3">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={riskFilter.enabled}
-            onChange={e => setRiskFilter(prev => ({ ...prev, enabled: e.target.checked }))}
-            className="rounded bg-gray-700 border-gray-600"
-          />
-          <span className="text-sm text-gray-400">Filter by Risk Level</span>
-        </label>
+      {/* Risk Filter — quiet advanced panel; quick-filter chips use the shared risk palette */}
+      <div
+        className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 rounded-md border px-3 py-2"
+        style={{ borderColor: 'var(--control-border)', background: 'var(--control-bg)' }}
+      >
+        <Toggle
+          checked={riskFilter.enabled}
+          onChange={v => setRiskFilter(prev => ({ ...prev, enabled: v }))}
+          label="Filter by risk"
+        />
 
-        <div className={`flex flex-wrap items-center gap-3 sm:gap-4 ${!riskFilter.enabled ? 'opacity-50' : ''}`}>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">Min:</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              value={riskFilter.min}
-              onChange={e => setRiskFilter(prev => ({
-                ...prev,
-                min: Math.max(0, Math.min(100, parseInt(e.target.value) || 0))
-              }))}
-              disabled={!riskFilter.enabled}
-              className="w-16 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
-            />
-            <span className="text-sm text-gray-500">%</span>
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {(['min', 'max'] as const).map(field => (
+            <div key={field} className="flex items-center gap-1.5">
+              <span
+                className="text-[11px] uppercase tracking-wider"
+                style={{ color: riskFilter.enabled ? 'var(--control-text)' : 'var(--faint)' }}
+              >
+                {field}
+              </span>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={riskFilter[field]}
+                aria-label={`Risk filter ${field} percent`}
+                onChange={e =>
+                  setRiskFilter(prev => ({
+                    ...prev,
+                    [field]: Math.max(0, Math.min(100, parseInt(e.target.value) || (field === 'min' ? 0 : 100))),
+                  }))
+                }
+                disabled={!riskFilter.enabled}
+                className="ctl w-14 rounded-md border bg-transparent px-2 py-1 text-[12px] tabular-nums outline-none disabled:cursor-not-allowed"
+                style={{
+                  borderColor: 'var(--control-border)',
+                  color: riskFilter.enabled ? 'var(--control-text-active)' : 'var(--faint)',
+                }}
+              />
+              <span className="text-[11px]" style={{ color: 'var(--faint)' }}>%</span>
+            </div>
+          ))}
 
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">Max:</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              value={riskFilter.max}
-              onChange={e => setRiskFilter(prev => ({
-                ...prev,
-                max: Math.max(0, Math.min(100, parseInt(e.target.value) || 100))
-              }))}
-              disabled={!riskFilter.enabled}
-              className="w-16 rounded bg-gray-700 border-gray-600 text-white text-sm px-2 py-1"
-            />
-            <span className="text-sm text-gray-500">%</span>
-          </div>
-
-          {/* Quick presets */}
-          <div className="flex items-center gap-1 ml-0 sm:ml-2">
-            <button
-              onClick={() => setRiskFilter({ min: 0, max: 30, enabled: true })}
-              disabled={!riskFilter.enabled}
-              className="rounded px-2 py-1 text-xs bg-green-800/50 text-green-400 hover:bg-green-800 disabled:opacity-50"
-            >
-              Low
-            </button>
-            <button
-              onClick={() => setRiskFilter({ min: 30, max: 60, enabled: true })}
-              disabled={!riskFilter.enabled}
-              className="rounded px-2 py-1 text-xs bg-yellow-800/50 text-yellow-400 hover:bg-yellow-800 disabled:opacity-50"
-            >
-              Mid
-            </button>
-            <button
-              onClick={() => setRiskFilter({ min: 60, max: 100, enabled: true })}
-              disabled={!riskFilter.enabled}
-              className="rounded px-2 py-1 text-xs bg-red-800/50 text-red-400 hover:bg-red-800 disabled:opacity-50"
-            >
-              High
-            </button>
+          {/* Quick presets — colors derived from the shared risk scale */}
+          <div className="flex items-center gap-1.5">
+            {(
+              [
+                { label: 'Low', min: 0, max: 30, color: riskToColor(0.15) },
+                { label: 'Mid', min: 30, max: 60, color: riskToColor(0.45) },
+                { label: 'High', min: 60, max: 100, color: riskToColor(0.8) },
+              ] as const
+            ).map(p => (
+              <button
+                key={p.label}
+                onClick={() => setRiskFilter({ min: p.min, max: p.max, enabled: true })}
+                disabled={!riskFilter.enabled}
+                className="ctl rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                style={{
+                  borderColor: riskFilter.enabled ? p.color.replace('rgb', 'rgba').replace(')', ', 0.45)') : 'var(--control-border)',
+                  color: riskFilter.enabled ? p.color : 'var(--faint)',
+                  background: 'transparent',
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
             <button
               onClick={() => setRiskFilter({ min: 0, max: 100, enabled: false })}
-              className="rounded px-2 py-1 text-xs bg-gray-700 text-gray-400 hover:bg-gray-600 ml-2"
+              className="ctl rounded-md border px-2 py-0.5 text-[11px] transition-colors"
+              style={{ borderColor: 'var(--control-border)', color: 'var(--control-text)' }}
             >
               Reset
             </button>
@@ -932,149 +1073,205 @@ export default function RiskDashboard() {
         </div>
 
         {riskFilter.enabled && (
-          <span className="text-xs sm:text-sm text-gray-400 sm:ml-auto">
-            Highlighting {chartData.filter(d => d.filteredRisk !== null).length} days in {riskFilter.min}-{riskFilter.max}% risk range
+          <span className="text-[11px] tabular-nums sm:ml-auto" style={{ color: 'var(--muted)' }}>
+            {chartData.filter(d => d.filteredRisk !== null).length} days in {riskFilter.min}–{riskFilter.max}%
+            {chartMode !== 'dual' && ' · other periods muted'}
           </span>
         )}
       </div>
 
-      {/* Main Chart */}
-      <div className="rounded-lg border border-gray-800 bg-gray-900 p-1 sm:p-4">
+      {/* Main Chart — the central analytical workspace */}
+      <div
+        className="rounded-xl border p-2 sm:p-5"
+        style={{ borderColor: 'var(--hairline)', background: 'var(--surface-raised)' }}
+      >
+        {/* Card header: title + compact series legend */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 pb-3">
+          <div className="flex items-baseline gap-3">
+            <h3 className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
+              BTC price & risk history
+            </h3>
+            <span className="ui-label hidden sm:inline">
+              {CHART_MODES.find(m => m.id === chartMode)?.hint}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+            {chartMode === 'dual' ? (
+              <span className="flex items-center gap-1.5">
+                <span aria-hidden className="inline-block w-4 h-[2px] rounded" style={{ background: C.price }} />
+                BTC price · left
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block w-4 h-[3px] rounded"
+                  style={{ background: riskScaleCssGradient(9) }}
+                />
+                BTC price · colored by risk · left
+              </span>
+            )}
+            {chartMode !== 'colored' &&
+              (showAdjusted ? (
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden className="inline-block w-4 h-[2px] rounded" style={{ background: C.adjusted }} />
+                  Cycle-adjusted · right
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden className="inline-block w-4 h-[2px] rounded" style={{ background: C.risk }} />
+                  Risk · right
+                </span>
+              ))}
+          </div>
+        </div>
+
         <div className="h-[360px] sm:h-[500px]">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
-              margin={{ top: 16, right: 34, left: 0, bottom: 12 }}
+              margin={{ top: 12, right: chartMode === 'colored' ? 12 : 6, left: 0, bottom: 8 }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
             >
-              {/* Gradient for risk area */}
               <defs>
-                <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#dc2626" stopOpacity={0.6} />
-                  <stop offset="50%" stopColor="#eab308" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.1} />
+                {/* Vertical fill under the risk line — same scale, low opacity */}
+                <linearGradient id="riskAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={riskToColor(1)} stopOpacity={0.22} />
+                  <stop offset="50%" stopColor={riskToColor(0.5)} stopOpacity={0.09} />
+                  <stop offset="100%" stopColor={riskToColor(0)} stopOpacity={0.03} />
                 </linearGradient>
+                {/* Horizontal per-observation gradient for the risk-colored price curve */}
+                {priceGradientStops && (
+                  <linearGradient id="priceRiskGradient" x1="0" y1="0" x2="1" y2="0">
+                    {priceGradientStops.map((s, i) => (
+                      <stop
+                        key={i}
+                        offset={`${(s.offset * 100).toFixed(3)}%`}
+                        stopColor={s.color}
+                        stopOpacity={s.opacity}
+                      />
+                    ))}
+                  </linearGradient>
+                )}
               </defs>
+
+              <CartesianGrid horizontal vertical={false} stroke={C.grid} />
 
               <XAxis
                 dataKey="date"
                 tickFormatter={formatDate}
-                stroke="#6b7280"
-                tick={{ fill: '#9ca3af', fontSize: 11 }}
-                tickLine={{ stroke: '#4b5563' }}
+                stroke={C.axisLine}
+                tick={{ fill: C.axisText, fontSize: 11 }}
+                tickLine={{ stroke: C.axisLine }}
                 interval="preserveStartEnd"
                 minTickGap={44}
               />
 
-              {/* Price axis (left) */}
+              {/* Price axis (left) — neutral, matches the BTC price series */}
               <YAxis
                 yAxisId="price"
                 orientation="left"
                 scale={logScale ? 'log' : 'linear'}
                 domain={['auto', 'auto']}
                 tickFormatter={formatPrice}
-                stroke="#6b7280"
-                tick={{ fill: '#9ca3af', fontSize: 11 }}
-                tickLine={{ stroke: '#4b5563' }}
-                width={40}
+                stroke={C.axisLine}
+                tick={{ fill: C.axisText, fontSize: 11 }}
+                tickLine={{ stroke: C.axisLine }}
+                width={44}
               />
 
-              {/* Risk axis (right) — violet when showing the cycle-adjusted line */}
+              {/* Risk axis (right) — soft series tint; hidden entirely in
+                  colored mode (the gradient legend replaces it) */}
               <YAxis
                 yAxisId="risk"
                 orientation="right"
                 domain={[0, 1]}
+                hide={chartMode === 'colored'}
                 tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
-                stroke={showAdjusted ? '#a855f7' : showHeatColors ? '#6b7280' : '#dc2626'}
-                tick={{ fill: showAdjusted ? '#a855f7' : showHeatColors ? '#9ca3af' : '#dc2626', fontSize: 11 }}
-                tickLine={{ stroke: showAdjusted ? '#a855f7' : showHeatColors ? '#4b5563' : '#dc2626' }}
-                width={34}
+                stroke={C.axisLine}
+                tick={{
+                  fill: showAdjusted ? 'rgba(168,85,247,0.75)' : 'rgba(244,124,106,0.7)',
+                  fontSize: 11,
+                }}
+                tickLine={{ stroke: C.axisLine }}
+                width={36}
               />
 
-              <Tooltip content={<CustomTooltip showAdjusted={showAdjusted} />} />
+              <Tooltip
+                content={<CustomTooltip showAdjusted={showAdjusted} />}
+                cursor={{ stroke: 'rgba(232,230,225,0.25)', strokeWidth: 1, strokeDasharray: '3 3' }}
+              />
 
-              {/* Halving reference lines */}
+              {/* Halving markers — visible but secondary to the data */}
               {visibleHalvings.map(date => (
                 <ReferenceLine
                   key={date}
                   x={date}
                   yAxisId="price"
-                  stroke="#a855f7"
-                  strokeDasharray="5 5"
+                  stroke={C.halving}
+                  strokeDasharray="3 5"
                   label={{
-                    value: 'Halving',
-                    fill: '#a855f7',
-                    fontSize: 10,
-                    position: 'top',
+                    value: 'HALVING',
+                    fill: C.halvingLabel,
+                    fontSize: 9,
+                    position: 'insideTop',
                   }}
                 />
               ))}
 
-              {/* Price line */}
-              <Line
-                yAxisId="price"
-                type="monotone"
-                dataKey="price"
-                stroke="#9ca3af"
-                strokeWidth={1.5}
-                dot={false}
-                isAnimationActive={false}
-              />
-
-              {/* Absolute (legacy) risk area — hidden when the cycle-adjusted
-                  line replaces it */}
-              {!showHeatColors && !showAdjusted && (
+              {/* Risk area fill — dual mode only, under the separate risk line */}
+              {chartMode === 'dual' && !showAdjusted && (
                 <Area
                   yAxisId="risk"
                   type="monotone"
                   dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
                   stroke="none"
-                  fill="url(#riskGradient)"
-                  fillOpacity={0.4}
+                  fill="url(#riskAreaGradient)"
                   isAnimationActive={false}
                   connectNulls={false}
                 />
               )}
 
-              {/* Absolute (legacy) risk line — hidden when cycle-adjusted is on */}
-              {!showAdjusted && (
+              {/* BTC price — neutral in dual mode, risk-colored gradient otherwise */}
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="price"
+                stroke={chartMode === 'dual' ? C.price : 'url(#priceRiskGradient)'}
+                strokeWidth={chartMode === 'dual' ? 1.4 : 2.2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                dot={false}
+                isAnimationActive={false}
+              />
+
+              {/* Separate risk series — dual + combined; hidden in colored mode.
+                  In combined it is thinner and translucent so it cannot
+                  overpower the colored price curve. */}
+              {chartMode !== 'colored' && !showAdjusted && (
                 <Line
                   yAxisId="risk"
                   type="monotone"
                   dataKey={showSmoothed ? 'filteredSmoothedRisk' : 'filteredRisk'}
-                  stroke={showHeatColors ? 'transparent' : '#dc2626'}
-                  strokeWidth={1.5}
+                  stroke={chartMode === 'dual' ? C.risk : C.riskCombined}
+                  strokeWidth={chartMode === 'dual' ? 1.4 : 1.2}
                   connectNulls={false}
-                  dot={showHeatColors ? (props) => {
-                    const { cx, cy, payload } = props as { cx?: number; cy?: number; payload?: UIDataPoint & { filteredRisk: number | null; filteredSmoothedRisk: number | null } };
-                    if (cx === undefined || cy === undefined || !payload) return null;
-                    const risk = showSmoothed ? payload.filteredSmoothedRisk : payload.filteredRisk;
-                    if (risk === null) return null;
-                    return (
-                      <circle
-                        key={`dot-${cx}-${cy}`}
-                        cx={cx}
-                        cy={cy}
-                        r={3}
-                        fill={getRiskHeatColor(risk)}
-                        stroke="none"
-                      />
-                    );
-                  } : false}
+                  dot={false}
                   isAnimationActive={false}
                 />
               )}
 
               {/* Cycle-adjusted (Layer-1) risk — REPLACES the legacy line when on */}
-              {showAdjusted && (
+              {chartMode !== 'colored' && showAdjusted && (
                 <Line
                   yAxisId="risk"
                   type="monotone"
                   dataKey="filteredAdjusted"
-                  stroke="#a855f7"
-                  strokeWidth={1.5}
+                  stroke={C.adjusted}
+                  strokeWidth={chartMode === 'dual' ? 1.4 : 1.2}
+                  strokeOpacity={chartMode === 'dual' ? 1 : 0.75}
                   dot={false}
                   connectNulls={false}
                   isAnimationActive={false}
@@ -1087,28 +1284,71 @@ export default function RiskDashboard() {
                   yAxisId="price"
                   x1={refAreaLeft}
                   x2={refAreaRight}
-                  strokeOpacity={0.3}
-                  fill="#ffffff"
-                  fillOpacity={0.2}
+                  stroke="rgba(232,230,225,0.3)"
+                  strokeOpacity={0.4}
+                  fill="#e8e6e1"
+                  fillOpacity={0.08}
                 />
               )}
 
-              {/* Brush for mini-map */}
+              {/* Navigator — simplified neutral price shape inside the brush */}
               <Brush
                 dataKey="date"
-                height={30}
-                stroke="#4b5563"
-                fill="#1f2937"
+                height={34}
+                travellerWidth={8}
+                stroke={C.brushStroke}
+                fill={C.brushFill}
                 tickFormatter={formatDate}
-              />
+              >
+                <ComposedChart>
+                  <Line
+                    dataKey="price"
+                    stroke={C.price}
+                    strokeOpacity={0.55}
+                    strokeWidth={1}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </Brush>
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="mt-2 text-xs text-gray-500 text-center">
-          Drag on chart to zoom • {chartData.length} days •{' '}
-          {chartData[0]?.date} - {chartData[chartData.length - 1]?.date}
-          {showHeatColors && ' • Heat Map: Blue (low risk) → Red (high risk)'}
+        {/* Risk color legend — the axis replacement for colored/combined modes */}
+        {chartMode !== 'dual' && (
+          <div className="px-1 pt-3">
+            <div className="flex items-center gap-3">
+              <span className="ui-label whitespace-nowrap">Low risk</span>
+              <div className="flex-1">
+                <div
+                  className="h-1.5 rounded-full"
+                  style={{ background: riskScaleCssGradient() }}
+                  aria-hidden
+                />
+                <div
+                  className="flex justify-between mt-1 text-[10px] tabular-nums"
+                  style={{ color: 'var(--faint)' }}
+                >
+                  {[0, 25, 50, 75, 100].map(v => (
+                    <span key={v}>{v}%</span>
+                  ))}
+                </div>
+              </div>
+              <span className="ui-label whitespace-nowrap">High risk</span>
+            </div>
+          </div>
+        )}
+
+        {/* Footer: interaction hint left, dataset metadata right */}
+        <div
+          className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 pt-2 mt-1 border-t text-[11px]"
+          style={{ borderColor: 'var(--hairline)', color: 'var(--faint)' }}
+        >
+          <span>Drag on chart to zoom · drag the navigator to pan</span>
+          <span className="tabular-nums" style={{ color: 'var(--muted)' }}>
+            {chartData.length.toLocaleString()} days · {chartData[0]?.date} → {chartData[chartData.length - 1]?.date}
+          </span>
         </div>
       </div>
 
