@@ -24,9 +24,9 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fitPowerLaw, evaluatePowerLaw, type PowerLawModel } from '@/lib/models/power-law';
-import { NEXT_HALVING_ESTIMATE } from '@/lib/models/s2f';
+import { NEXT_HALVING_ESTIMATE, NEXT_HALVING_ESTIMATE_2 } from '@/lib/models/s2f';
 import { projectionDates, addDays } from '@/lib/models/projection';
-import { C, Toggle } from './chart-ui';
+import { C, Segmented, Toggle } from './chart-ui';
 
 interface SeriesPoint {
   date: string;
@@ -39,13 +39,21 @@ interface Row {
   fair: number;
   support: number;
   resistance: number;
+  envelopeFloor: number;
+  envelopeCeiling: number;
   band: [number, number];
 }
+
+/** Projection horizon: off, next est. halving +6mo, or the long ~2032 view. */
+type Horizon = 'off' | 'halving' | 'long';
 
 const PRICE_COLOR = '#60a5fa';
 const FAIR_COLOR = '#eab308';
 const SUPPORT_COLOR = '#22c55e';
 const RESISTANCE_COLOR = '#dc2626';
+const ENV_FLOOR_COLOR = '#4ade80';
+const ENV_CEIL_COLOR = '#c084fc';
+const MS_PER_DAY = 86_400_000;
 
 function fmtPrice(v: number): string {
   if (!Number.isFinite(v)) return '';
@@ -55,7 +63,15 @@ function fmtPrice(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
-function PLTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Row }> }) {
+function PLTooltip({
+  active,
+  payload,
+  showEnvelope,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: Row }>;
+  showEnvelope?: boolean;
+}) {
   if (!active || !payload || payload.length === 0) return null;
   const row = payload[0].payload;
   const dev = row.price !== undefined ? row.price / row.fair - 1 : null;
@@ -73,10 +89,22 @@ function PLTooltip({ active, payload }: { active?: boolean; payload?: Array<{ pa
         )}
         <span style={{ color: FAIR_COLOR }}>Power-law fair</span>
         <span className="text-right" style={{ color: 'var(--foreground)' }}>{fmtPrice(row.fair)}</span>
+        {showEnvelope && (
+          <>
+            <span style={{ color: ENV_CEIL_COLOR }}>Cycle ceiling (env.)</span>
+            <span className="text-right" style={{ color: 'var(--foreground)' }}>{fmtPrice(row.envelopeCeiling)}</span>
+          </>
+        )}
         <span style={{ color: RESISTANCE_COLOR }}>Resistance (Q95)</span>
         <span className="text-right" style={{ color: 'var(--foreground)' }}>{fmtPrice(row.resistance)}</span>
         <span style={{ color: SUPPORT_COLOR }}>Support (Q05)</span>
         <span className="text-right" style={{ color: 'var(--foreground)' }}>{fmtPrice(row.support)}</span>
+        {showEnvelope && (
+          <>
+            <span style={{ color: ENV_FLOOR_COLOR }}>Cycle floor (env.)</span>
+            <span className="text-right" style={{ color: 'var(--foreground)' }}>{fmtPrice(row.envelopeFloor)}</span>
+          </>
+        )}
         {dev !== null && (
           <>
             <span style={{ color: 'var(--muted)' }}>vs fair value</span>
@@ -91,7 +119,10 @@ function PLTooltip({ active, payload }: { active?: boolean; payload?: Array<{ pa
 }
 
 export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
-  const [project, setProject] = useState(false);
+  const [horizon, setHorizon] = useState<Horizon>('off');
+  const [showEnvelope, setShowEnvelope] = useState(false);
+  // Bitbo-style quick view: last ~5y of data (+ any active projection)
+  const [recentView, setRecentView] = useState(false);
   const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
@@ -115,6 +146,10 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
         return t >= zoom.start && t <= zoom.end;
       });
       if (visible.length < 2) visible = series;
+    } else if (recentView) {
+      const cutoff = new Date(series[series.length - 1].date).getTime() - 5 * 365 * MS_PER_DAY;
+      visible = series.filter(p => new Date(p.date).getTime() >= cutoff);
+      if (visible.length < 2) visible = series;
     }
 
     const step = Math.max(1, Math.ceil(visible.length / 1100));
@@ -127,13 +162,19 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
     const last = visible[visible.length - 1];
     if (out[out.length - 1]?.date !== last.date) push(last.date, last.close);
 
-    if (!zoom && project) {
-      for (const d of projectionDates(last.date, addDays(NEXT_HALVING_ESTIMATE, 183), [NEXT_HALVING_ESTIMATE])) {
-        push(d);
-      }
+    if (!zoom && horizon !== 'off') {
+      const end =
+        horizon === 'halving'
+          ? addDays(NEXT_HALVING_ESTIMATE, 183)
+          : addDays(NEXT_HALVING_ESTIMATE_2, 183);
+      const markers =
+        horizon === 'halving'
+          ? [NEXT_HALVING_ESTIMATE]
+          : [NEXT_HALVING_ESTIMATE, NEXT_HALVING_ESTIMATE_2];
+      for (const d of projectionDates(last.date, end, markers, step)) push(d);
     }
     return out;
-  }, [model, series, zoom, project]);
+  }, [model, series, zoom, recentView, horizon]);
 
   const spanDays = rows.length > 1
     ? (new Date(rows[rows.length - 1].date).getTime() - new Date(rows[0].date).getTime()) / 86_400_000
@@ -202,15 +243,36 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
             {dev >= 0 ? '+' : ''}{(dev * 100).toFixed(0)}%
           </span>
         </span>
-        <span className="ml-auto">
+        <span className="ml-auto flex flex-wrap items-center gap-2">
           <Toggle
-            checked={project}
-            onChange={setProject}
-            label={`Project to est. ${NEXT_HALVING_ESTIMATE.slice(0, 4)} halving +6mo`}
-            accent={C.halvingLabel}
-            title="Extend the fitted curves to the estimated next halving (2028-04-16, block-schedule estimate) plus six months"
+            checked={showEnvelope}
+            onChange={setShowEnvelope}
+            label="Envelope"
+            accent={ENV_CEIL_COLOR}
+            title="Cycle floor/ceiling corridor — parallel lines through the single most extreme observations (Santostasi/bitbo-style)"
+          />
+          <Toggle
+            checked={recentView}
+            onChange={setRecentView}
+            label="Recent (5y)"
+            title="Show only the last five years of data (plus any active projection) — the bitbo-style view"
             disabled={!!zoom}
           />
+          <span className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: 'var(--faint)' }}>
+              Projection
+            </span>
+            <Segmented<Horizon>
+              ariaLabel="Projection horizon"
+              options={[
+                { value: 'off', label: 'Off' },
+                { value: 'halving', label: '2028 +6mo', title: 'To the estimated next halving (2028-04-16) plus six months' },
+                { value: 'long', label: '~2032', title: 'Through TWO estimated halvings (2028-04-16, 2032-04-13) — very speculative extrapolation' },
+              ]}
+              value={zoom ? 'off' : horizon}
+              onChange={setHorizon}
+            />
+          </span>
         </span>
       </div>
 
@@ -239,12 +301,12 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
               tick={{ fill: '#8a877f', fontSize: 11 }}
               width={62}
             />
-            <Tooltip content={<PLTooltip />} />
+            <Tooltip content={<PLTooltip showEnvelope={showEnvelope} />} />
 
             {/* support→resistance band */}
             <Area dataKey="band" stroke="none" fill={FAIR_COLOR} fillOpacity={0.06} isAnimationActive={false} />
 
-            {project && !zoom && (
+            {horizon !== 'off' && !zoom && (
               <ReferenceLine
                 x={NEXT_HALVING_ESTIMATE}
                 stroke={C.halving}
@@ -252,10 +314,38 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
                 label={{ value: 'HALVING · EST', fill: C.halvingLabel, fontSize: 9, position: 'insideTop' }}
               />
             )}
+            {horizon === 'long' && !zoom && (
+              <ReferenceLine
+                x={NEXT_HALVING_ESTIMATE_2}
+                stroke={C.halving}
+                strokeDasharray="3 5"
+                label={{ value: 'HALVING · EST', fill: C.halvingLabel, fontSize: 9, position: 'insideTop' }}
+              />
+            )}
 
+            {showEnvelope && (
+              <Line
+                dataKey="envelopeCeiling"
+                stroke={ENV_CEIL_COLOR}
+                strokeWidth={1.25}
+                strokeDasharray="6 4"
+                dot={false}
+                isAnimationActive={false}
+              />
+            )}
             <Line dataKey="resistance" stroke={RESISTANCE_COLOR} strokeWidth={1} strokeOpacity={0.8} dot={false} isAnimationActive={false} />
             <Line dataKey="fair" stroke={FAIR_COLOR} strokeWidth={1.75} dot={false} isAnimationActive={false} />
             <Line dataKey="support" stroke={SUPPORT_COLOR} strokeWidth={1} strokeOpacity={0.8} dot={false} isAnimationActive={false} />
+            {showEnvelope && (
+              <Line
+                dataKey="envelopeFloor"
+                stroke={ENV_FLOOR_COLOR}
+                strokeWidth={1.25}
+                strokeDasharray="6 4"
+                dot={false}
+                isAnimationActive={false}
+              />
+            )}
             <Line dataKey="price" stroke={PRICE_COLOR} strokeWidth={1.5} dot={false} connectNulls={false} isAnimationActive={false} />
 
             {refAreaLeft && refAreaRight && (
@@ -266,7 +356,8 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
       </div>
 
       <div className="mt-1 text-[10px] text-center" style={{ color: 'var(--faint)' }}>
-        Drag on chart to zoom{project && !zoom ? ' · dashed line = block-schedule ESTIMATE of the next halving' : ''}
+        Drag on chart to zoom
+        {horizon !== 'off' && !zoom ? ' · dashed vertical lines = block-schedule ESTIMATES of future halvings' : ''}
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 justify-center text-[11px]" style={{ color: 'var(--muted)' }}>
@@ -274,6 +365,16 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
         <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: FAIR_COLOR }} />Power-law fair value</span>
         <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: RESISTANCE_COLOR }} />Resistance (residual Q95)</span>
         <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: SUPPORT_COLOR }} />Support (residual Q05)</span>
+        {showEnvelope && (
+          <>
+            <span className="flex items-center gap-1.5" style={{ color: ENV_CEIL_COLOR }}>
+              <span className="w-4 border-t border-dashed" style={{ borderColor: ENV_CEIL_COLOR }} />Cycle ceiling (envelope)
+            </span>
+            <span className="flex items-center gap-1.5" style={{ color: ENV_FLOOR_COLOR }}>
+              <span className="w-4 border-t border-dashed" style={{ borderColor: ENV_FLOOR_COLOR }} />Cycle floor (envelope)
+            </span>
+          </>
+        )}
       </div>
 
       <div className="mt-4 grid gap-2 text-[12px] leading-relaxed border-t pt-4" style={{ color: 'var(--muted)', borderColor: 'var(--hairline)' }}>
@@ -289,14 +390,17 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
           <span className="uppercase text-[10px] tracking-[0.14em]" style={{ color: 'var(--faint)' }}>bands · </span>
           Support/resistance are the 5th/95th percentiles of the fit&rsquo;s ln-residuals, so ~90% of the
           fitted sample lies between them by construction — an in-sample coverage statement, not a
-          forecast interval.
+          forecast interval. The optional envelope corridor (Santostasi/bitbo-style) instead runs
+          parallel lines through the single most extreme observations — it touches the historical
+          cycle floor and ceiling, so one new extreme day would move it.
         </div>
         <div>
           <span className="uppercase text-[10px] tracking-[0.14em]" style={{ color: 'var(--faint)' }}>honesty · </span>
           Full-sample descriptive fit refit on each load; the exponent is sensitive to the sample start
-          date. The projection extrapolates the fitted curve to the estimated next halving
-          ({NEXT_HALVING_ESTIMATE}, derived from 210,000 blocks at an assumed 144 blocks/day) plus six
-          months — an extrapolation, not a forecast.
+          date. Projections extrapolate the fitted curve to block-schedule halving ESTIMATES
+          ({NEXT_HALVING_ESTIMATE} and, on the long horizon, {NEXT_HALVING_ESTIMATE_2} — derived from
+          210,000 blocks at an assumed 144 blocks/day). The ~2032 horizon spans two estimated halvings
+          and is very speculative — extrapolation, never a forecast.
         </div>
       </div>
     </section>

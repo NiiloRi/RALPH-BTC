@@ -54,6 +54,33 @@ describe('fitPowerLaw', () => {
     expect(() => fitPowerLaw(['2020-01-01'], [100])).toThrow(/valid points/);
   });
 
+  it('envelope lines touch the historical extremes by construction', () => {
+    const prices = dates.map((d, i) => {
+      const noise = Math.sin(i * 12.9898) * 0.8;
+      return Math.exp(1 + noise) * Math.pow(daysSinceGenesis(d), 5.0);
+    });
+    const m = fitPowerLaw(dates, prices);
+    let minRatio = Infinity;
+    let maxRatio = -Infinity;
+    let inside = 0;
+    for (let i = 0; i < dates.length; i++) {
+      const v = evaluatePowerLaw(m, dates[i]);
+      // every observation within the envelope corridor
+      expect(prices[i]).toBeGreaterThanOrEqual(v.envelopeFloor * (1 - 1e-9));
+      expect(prices[i]).toBeLessThanOrEqual(v.envelopeCeiling * (1 + 1e-9));
+      if (prices[i] >= v.envelopeFloor && prices[i] <= v.envelopeCeiling) inside++;
+      minRatio = Math.min(minRatio, prices[i] / v.envelopeFloor);
+      maxRatio = Math.max(maxRatio, prices[i] / v.envelopeCeiling);
+    }
+    expect(inside).toBe(dates.length); // 100% coverage
+    expect(minRatio).toBeCloseTo(1, 6); // floor TOUCHES the lowest observation
+    expect(maxRatio).toBeCloseTo(1, 6); // ceiling TOUCHES the highest observation
+    // envelope strictly outside the quantile bands
+    const v = evaluatePowerLaw(m, '2020-01-01');
+    expect(v.envelopeFloor).toBeLessThan(v.support);
+    expect(v.envelopeCeiling).toBeGreaterThan(v.resistance);
+  });
+
   it('evaluates future dates: finite, positive, support < fair < resistance', () => {
     const prices = dates.map((d, i) => Math.exp(1 + Math.sin(i) * 0.3) * Math.pow(daysSinceGenesis(d), 5.5));
     const m = fitPowerLaw(dates, prices);

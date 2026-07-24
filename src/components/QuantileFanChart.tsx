@@ -228,7 +228,8 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
         for (const d of projectionDates(
           lastVisible.date,
           addDays(NEXT_HALVING_ESTIMATE, 183),
-          [NEXT_HALVING_ESTIMATE]
+          [NEXT_HALVING_ESTIMATE],
+          step
         )) {
           push(d);
         }

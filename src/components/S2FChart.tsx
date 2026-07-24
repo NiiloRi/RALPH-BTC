@@ -125,7 +125,7 @@ export default function S2FChart({ series }: { series: SeriesPoint[] }) {
     if (out[out.length - 1]?.date !== last.date) push(last.date, last.close);
 
     if (!zoom && project) {
-      for (const d of projectionDates(last.date, addDays(NEXT_HALVING_ESTIMATE, 183), [NEXT_HALVING_ESTIMATE])) {
+      for (const d of projectionDates(last.date, addDays(NEXT_HALVING_ESTIMATE, 183), [NEXT_HALVING_ESTIMATE], step)) {
         push(d);
       }
     }

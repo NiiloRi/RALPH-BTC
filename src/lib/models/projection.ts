@@ -17,17 +17,25 @@ function iso(ms: number): string {
   return new Date(ms).toISOString().split('T')[0];
 }
 
+/**
+ * @param stepDays row spacing in days (default 7). Charts with a CATEGORY
+ * x-axis should pass their historical downsampling step here — every row
+ * takes equal horizontal width, so a density mismatch between history and
+ * projection would visibly kink the curves at the boundary.
+ */
 export function projectionDates(
   lastDataDate: string,
   endDate: string,
-  mustInclude: string[] = []
+  mustInclude: string[] = [],
+  stepDays = 7
 ): string[] {
   const lastMs = new Date(lastDataDate).getTime();
   const endMs = new Date(endDate).getTime();
   if (!Number.isFinite(lastMs) || !Number.isFinite(endMs) || endMs <= lastMs) return [];
+  const step = Math.max(1, Math.round(stepDays));
 
   const dates = new Set<string>();
-  for (let ms = lastMs + 7 * MS_PER_DAY; ms < endMs; ms += 7 * MS_PER_DAY) {
+  for (let ms = lastMs + step * MS_PER_DAY; ms < endMs; ms += step * MS_PER_DAY) {
     dates.add(iso(ms));
   }
   dates.add(iso(endMs)); // final row exactly endDate

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ERAS,
   NEXT_HALVING_ESTIMATE,
+  NEXT_HALVING_ESTIMATE_2,
   btcSupplyAt,
   annualFlowAt,
   s2fAt,
@@ -95,8 +96,16 @@ describe('S2F values', () => {
     expect(NEXT_HALVING_ESTIMATE).toBe('2028-04-16');
   });
 
-  it('era table has 6 eras with halving subsidies', () => {
-    expect(ERAS.map(e => e.subsidy)).toEqual([50, 25, 12.5, 6.25, 3.125, 1.5625]);
+  it('era table has 7 eras with halving subsidies', () => {
+    expect(ERAS.map(e => e.subsidy)).toEqual([50, 25, 12.5, 6.25, 3.125, 1.5625, 0.78125]);
+  });
+
+  it('second estimated halving is 2032-04-13 and S2F jumps 2× there too', () => {
+    expect(NEXT_HALVING_ESTIMATE_2).toBe('2032-04-13');
+    const before = s2fAt('2032-04-12');
+    const after = s2fAt(NEXT_HALVING_ESTIMATE_2);
+    expect(after / before).toBeGreaterThan(1.99);
+    expect(after / before).toBeLessThan(2.01);
   });
 });
 

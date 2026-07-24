@@ -28,6 +28,13 @@ export interface PowerLawModel {
   /** 5th/95th percentile of ln-residuals (log space) */
   residQ05: number;
   residQ95: number;
+  /**
+   * Extreme ln-residuals — ENVELOPE offsets (Santostasi/bitbo-style corridor):
+   * parallel lines through the single lowest/highest observation vs the fit,
+   * i.e. they touch the historical cycle floor/ceiling by construction.
+   */
+  residMin: number;
+  residMax: number;
   r2: number;
   fittedN: number;
   fittedRange: { start: string; end: string };
@@ -90,6 +97,8 @@ export function fitPowerLaw(dates: string[], prices: number[]): PowerLawModel {
     b,
     residQ05: quantile(residuals, 0.05),
     residQ95: quantile(residuals, 0.95),
+    residMin: residuals[0],
+    residMax: residuals[residuals.length - 1],
     r2: ssTot > 0 ? 1 - ssRes / ssTot : 1,
     fittedN: n,
     fittedRange: { start: dates[kept[0]], end: dates[kept[kept.length - 1]] },
@@ -100,12 +109,21 @@ export function fitPowerLaw(dates: string[], prices: number[]): PowerLawModel {
 export function evaluatePowerLaw(
   m: PowerLawModel,
   date: string
-): { fair: number; support: number; resistance: number } {
+): {
+  fair: number;
+  support: number;
+  resistance: number;
+  /** Envelope corridor — touches the historical cycle floor/ceiling */
+  envelopeFloor: number;
+  envelopeCeiling: number;
+} {
   const days = Math.max(1, daysSinceGenesis(date));
   const fair = Math.exp(m.a + m.b * Math.log(days));
   return {
     fair,
     support: fair * Math.exp(m.residQ05),
     resistance: fair * Math.exp(m.residQ95),
+    envelopeFloor: fair * Math.exp(m.residMin),
+    envelopeCeiling: fair * Math.exp(m.residMax),
   };
 }

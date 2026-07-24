@@ -34,6 +34,12 @@ const ASSUMED_BLOCKS_PER_DAY = 144;
 const MIN_POINTS = 24;
 
 export const NEXT_HALVING_ESTIMATE = '2028-04-16';
+/**
+ * Second estimated halving: NEXT_HALVING_ESTIMATE + 210,000/144 ≈ 1458 days
+ * → 2032-04-13 (the 2028→2032 span contains one Feb 29). Used by the long
+ * projection horizon; even more uncertain than the first estimate.
+ */
+export const NEXT_HALVING_ESTIMATE_2 = '2032-04-13';
 
 export interface Era {
   start: string;
@@ -68,6 +74,15 @@ function buildEras(): Era[] {
   // Projection era beyond the estimated halving
   eras.push({
     start: NEXT_HALVING_ESTIMATE,
+    subsidy,
+    blocksPerDay: ASSUMED_BLOCKS_PER_DAY,
+    startSupply,
+  });
+  startSupply += BLOCKS_PER_ERA * subsidy;
+  subsidy /= 2;
+  // Second projection era (long horizon ~2032) — keeps s2fAt correct there
+  eras.push({
+    start: NEXT_HALVING_ESTIMATE_2,
     subsidy,
     blocksPerDay: ASSUMED_BLOCKS_PER_DAY,
     startSupply,
