@@ -29,6 +29,7 @@ import { DEFAULT_WEIGHTS } from '@/lib/risk/model';
 import type { MetaLayersOutput } from '@/lib/meta';
 import type { DivergenceResult } from '@/lib/adjusted/divergence';
 import { topProximityLabel, type TopProximityResult } from '@/lib/adjusted/top-proximity';
+import SharePanel from './SharePanel';
 
 export interface HeroDataPoint {
   date: string;
@@ -294,6 +295,19 @@ export default function VerdictHero(props: VerdictHeroProps) {
           {!isLiveSource && <Chip tone="warn">fallback · {dataSource} · last {latest.date}</Chip>}
           {isStale && <Chip tone="alert">stale · {staleDays}d old</Chip>}
           {macroAvailable === false && <Chip tone="warn">macro n/a</Chip>}
+          {riskYear && riskYear.length >= 30 && fanYear && fanYear.length >= 30 && (
+            <SharePanel
+              card={{
+                date: latest.date,
+                price: latest.price,
+                smoothedRisk: latest.smoothedRisk,
+                adjusted,
+                priceChange7d: prev7d ? (latest.price - prev7d.price) / prev7d.price : null,
+                fanYear,
+                riskYear,
+              }}
+            />
+          )}
         </div>
       </div>
 

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "html-to-image": "^1.11.13",
     "jose": "^6.2.4",
     "next": "16.1.1",
     "react": "19.2.3",
