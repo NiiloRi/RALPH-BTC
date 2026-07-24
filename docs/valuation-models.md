@@ -133,3 +133,13 @@ Recreation of the Blockworks "cycle low" condition basket (Luke Leasure /
 - Limitations surfaced in the UI verbatim from the source report: n ≈ 3–4
   episodes, signals are not independent (all measure "deep persistent
   drawdown"), structural change may break every relationship.
+
+### Scenario ensemble (Overview strip)
+
+The report's "Path Forward" chart (`src/lib/models/scenario-ensemble.ts`):
+each path = BTC's realized 3-year weekly log-trajectory after a COMPLETED
+NAS100/BTC episode, scaled by s ∈ {0.33…0.80} and replayed from spot;
+weekly 10/25/75/90 percentile bands across all paths. Shown on the Overview
+hero (user-toggleable card 'scenario'). The strip's own caption carries the
+report's warning: replays of history that all resolved favorably — no
+failed-signal distribution, not a prediction.

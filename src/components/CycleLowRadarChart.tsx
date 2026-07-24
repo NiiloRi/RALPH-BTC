@@ -13,7 +13,7 @@
  * NOT independent — the footnotes carry the source report's own limitations.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   ComposedChart,
   Line,
@@ -44,33 +44,25 @@ function fmtPrice(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
-interface RadarApi {
+export interface RadarApi {
   ndx: Point[];
   gold: Point[];
   realized: Point[];
   stale?: boolean;
 }
 
-export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }) {
-  const [external, setExternal] = useState<RadarApi | null>(null);
-  const [failed, setFailed] = useState(false);
+export default function CycleLowRadarChart({
+  series,
+  radar: external,
+  radarFailed: failed,
+}: {
+  series: SeriesPoint[];
+  /** external series fetched once by RiskDashboard (shared with the hero) */
+  radar: RadarApi | null;
+  radarFailed: boolean;
+}) {
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/radar')
-      .then(res => (res.ok ? res.json() : null))
-      .then(json => {
-        if (cancelled) return;
-        if (json && Array.isArray(json.ndx)) setExternal(json);
-        else setFailed(true);
-      })
-      .catch(() => !cancelled && setFailed(true));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const radar: RadarResult | null = useMemo(() => {
+  const result: RadarResult | null = useMemo(() => {
     if (!external || series.length < 200) return null;
     try {
       return computeRadar(
@@ -86,46 +78,46 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
 
   // RSI chart rows: NAS + Gold aligned on NAS dates
   const rsiRows = useMemo(() => {
-    if (!radar) return [];
-    const goldByDate = new Map(radar.gold.series.map(p => [p.date, p.value]));
-    return radar.nas.series.map(p => ({
+    if (!result) return [];
+    const goldByDate = new Map(result.gold.series.map(p => [p.date, p.value]));
+    return result.nas.series.map(p => ({
       date: p.date,
       nas: p.value,
       gold: goldByDate.get(p.date),
     }));
-  }, [radar]);
+  }, [result]);
 
   // Realized-price rows, downsampled
   const realizedRows = useMemo(() => {
-    if (!radar) return [];
-    const j = radar.realized.joined;
+    if (!result) return [];
+    const j = result.realized.joined;
     const step = Math.max(1, Math.ceil(j.length / 1100));
     const out = [];
     for (let i = 0; i < j.length; i += step) out.push(j[i]);
     if (out[out.length - 1]?.date !== j[j.length - 1].date) out.push(j[j.length - 1]);
     return out;
-  }, [radar]);
+  }, [result]);
 
   // Cycle-clock rows: week index → drawdown per path
   const clockRows = useMemo(() => {
-    if (!radar) return [];
+    if (!result) return [];
     const maxW = Math.max(
-      radar.clock.current.drawdownByWeek.length,
-      ...radar.clock.priors.map(p => p.drawdownByWeek.length)
+      result.clock.current.drawdownByWeek.length,
+      ...result.clock.priors.map(p => p.drawdownByWeek.length)
     );
     const rows = [];
     for (let w = 0; w < maxW; w++) {
       const row: Record<string, number> = { week: w };
-      radar.clock.priors.forEach(p => {
+      result.clock.priors.forEach(p => {
         if (w < p.drawdownByWeek.length) row[p.label] = -p.drawdownByWeek[w] * 100;
       });
-      if (w < radar.clock.current.drawdownByWeek.length) {
-        row.current = -radar.clock.current.drawdownByWeek[w] * 100;
+      if (w < result.clock.current.drawdownByWeek.length) {
+        row.current = -result.clock.current.drawdownByWeek[w] * 100;
       }
       rows.push(row);
     }
     return rows;
-  }, [radar]);
+  }, [result]);
 
   const fmtYear = (d: string) => String(new Date(d).getFullYear());
 
@@ -140,7 +132,7 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
       </section>
     );
   }
-  if (!radar) {
+  if (!result) {
     return (
       <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>Cycle Low Radar</h3>
@@ -153,7 +145,7 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
     );
   }
 
-  const tailCount = radar.signals.filter(s => s.inTail).length;
+  const tailCount = result.signals.filter(s => s.inTail).length;
 
   return (
     <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
@@ -173,7 +165,7 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
 
       {/* signal chips */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
-        {radar.signals.map(s => (
+        {result.signals.map(s => (
           <div
             key={s.key}
             className="rounded-lg border px-3 py-2"
@@ -230,8 +222,8 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
         </ResponsiveContainer>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 mb-6 justify-center text-[11px]" style={{ color: 'var(--muted)' }}>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: NAS_COLOR }} />NAS100/BTC ({radar.nas.current.toFixed(1)} · {(radar.nas.pctAbove65 * 100).toFixed(1)}% of history ≥65)</span>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: GOLD_COLOR }} />Gold/BTC ({radar.gold.current.toFixed(1)} · {(radar.gold.pctAbove65 * 100).toFixed(1)}% ≥65)</span>
+        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: NAS_COLOR }} />NAS100/BTC ({result.nas.current.toFixed(1)} · {(result.nas.pctAbove65 * 100).toFixed(1)}% of history ≥65)</span>
+        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: GOLD_COLOR }} />Gold/BTC ({result.gold.current.toFixed(1)} · {(result.gold.pctAbove65 * 100).toFixed(1)}% ≥65)</span>
       </div>
 
       {/* 2 · spot vs realized price */}
@@ -263,8 +255,8 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
         </ResponsiveContainer>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 mb-6 justify-center text-[11px]" style={{ color: 'var(--muted)' }}>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: SPOT_COLOR }} />BTC spot ({fmtPrice(radar.realized.spotNow)})</span>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: REALIZED_COLOR }} />Realized price ({fmtPrice(radar.realized.realizedNow)} · {(radar.realized.pctHistoryBelow * 100).toFixed(0)}% of shown window below)</span>
+        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: SPOT_COLOR }} />BTC spot ({fmtPrice(result.realized.spotNow)})</span>
+        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: REALIZED_COLOR }} />Realized price ({fmtPrice(result.realized.realizedNow)} · {(result.realized.pctHistoryBelow * 100).toFixed(0)}% of shown window below)</span>
       </div>
 
       {/* 3 · cycle drawdown clock */}
@@ -292,7 +284,7 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
               }}
             />
             <ReferenceLine x={60} stroke="rgba(167,139,250,0.38)" strokeDasharray="3 5" label={{ value: 'WK 60 · PRIOR TROUGHS SET BY HERE', fill: 'rgba(196,181,253,0.75)', fontSize: 9, position: 'insideTopRight' }} />
-            {radar.clock.priors.map((p, i) => (
+            {result.clock.priors.map((p, i) => (
               <Line key={p.label} dataKey={p.label} stroke={PRIOR_COLORS[i % PRIOR_COLORS.length]} strokeWidth={1.1} dot={false} isAnimationActive={false} />
             ))}
             <Line dataKey="current" stroke={CURRENT_COLOR} strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -300,8 +292,8 @@ export default function CycleLowRadarChart({ series }: { series: SeriesPoint[] }
         </ResponsiveContainer>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 justify-center text-[11px]" style={{ color: 'var(--muted)' }}>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: CURRENT_COLOR }} />current cycle (wk {radar.clock.weeksSinceATH}, −{(radar.clock.drawdownNow * 100).toFixed(0)}%)</span>
-        {radar.clock.priors.map((p, i) => (
+        <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: CURRENT_COLOR }} />current cycle (wk {result.clock.weeksSinceATH}, −{(result.clock.drawdownNow * 100).toFixed(0)}%)</span>
+        {result.clock.priors.map((p, i) => (
           <span key={p.label} className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: PRIOR_COLORS[i % PRIOR_COLORS.length] }} />{p.label} cycle</span>
         ))}
       </div>

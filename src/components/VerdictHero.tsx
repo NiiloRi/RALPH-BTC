@@ -65,6 +65,8 @@ interface VerdictHeroProps {
   riskYear?: { date: string; price: number; adjusted: number | null }[];
   /** Trailing ~12 months of price + valuation-model values (mini strips) */
   modelsYear?: ModelsYearRow[];
+  /** Scenario ensemble (scaled post-signal path replays), null until radar data lands */
+  scenario?: ScenarioProp | null;
   /** Per-user card visibility (main verdict card is always shown) */
   cards?: OverviewCardPrefs;
   /** Layer-1 cycle-adjusted risk for the latest day (null during burn-in) */
@@ -85,6 +87,20 @@ export interface ModelsYearRow {
   s2f: number;
   /** difficulty model value — null until /api/difficulty lands */
   difficulty: number | null;
+}
+
+/** Scenario-ensemble strip row: weekly history (price) or forward bands */
+export interface ScenarioRow {
+  date: string;
+  price?: number;
+  band1090?: [number, number];
+  band2575?: [number, number];
+}
+
+export interface ScenarioProp {
+  rows: ScenarioRow[];
+  anchors: string[];
+  pathCount: number;
 }
 
 export interface FanYearRow {
@@ -235,7 +251,7 @@ export default function VerdictHero(props: VerdictHeroProps) {
   const {
     latest, prev7d, meta, macroAvailable,
     isLiveSource, isStale, staleDays, dataSource, lastUpdated, sma200wRatio,
-    fanYear, riskYear, modelsYear, cards: cardsProp, adjusted = null, divergence = null, topProximity = null,
+    fanYear, riskYear, modelsYear, scenario = null, cards: cardsProp, adjusted = null, divergence = null, topProximity = null,
   } = props;
   const cards = cardsProp ?? defaultOverviewCards();
 
@@ -542,6 +558,118 @@ export default function VerdictHero(props: VerdictHeroProps) {
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      )}
+
+      {/* Scenario ensemble — scaled replays of BTC's 3-year paths after prior
+          completed NAS100/BTC episodes (Blockworks methodology). History
+          weekly + forward percentile bands from today's price. */}
+      {cards.scenario && scenario && scenario.rows.length >= 60 && (
+        <div
+          className="relative border-t px-4 sm:px-6 pt-3 pb-4 rise"
+          style={{ borderColor: 'var(--hairline)', animationDelay: '0.36s' }}
+        >
+          <div
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[10px] uppercase tracking-[0.14em]"
+            style={{ color: 'var(--faint)' }}
+          >
+            <span>Scenario ensemble · scaled post-signal path replays · 3y forward · log</span>
+            <span className="ml-auto flex items-center gap-3 normal-case tracking-normal text-[10px]">
+              <span className="flex items-center gap-1" style={{ color: '#fbbf24' }}>
+                <span className="w-3 h-0.5 rounded" style={{ background: '#fbbf24' }} />BTC close
+              </span>
+              <span className="flex items-center gap-1" style={{ color: 'rgba(167,139,250,0.9)' }}>
+                <span className="w-3 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.2)' }} />10–90th
+              </span>
+              <span className="flex items-center gap-1" style={{ color: 'rgba(196,181,253,1)' }}>
+                <span className="w-3 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.45)' }} />25–75th
+              </span>
+            </span>
+          </div>
+          <div className="h-[230px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={scenario.rows} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(d: string) => String(new Date(d).getFullYear())}
+                  interval="preserveStartEnd"
+                  minTickGap={60}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#55534d', fontSize: 9 }}
+                  height={14}
+                />
+                <YAxis
+                  scale="log"
+                  domain={['auto', 'auto']}
+                  tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#55534d', fontSize: 9 }}
+                  width={40}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const p = payload[0].payload as ScenarioRow;
+                    return (
+                      <div
+                        className="rounded border px-2.5 py-1.5 text-[10px]"
+                        style={{ borderColor: 'var(--hairline)', background: 'var(--surface)', color: 'var(--muted)' }}
+                      >
+                        <div style={{ color: 'var(--foreground)' }}>
+                          {new Date(p.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </div>
+                        {p.price !== undefined && (
+                          <div style={{ color: '#fbbf24' }}>
+                            ${p.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </div>
+                        )}
+                        {p.band1090 && (
+                          <>
+                            <div style={{ color: 'rgba(196,181,253,1)' }}>
+                              25–75th ${(p.band2575![0] / 1000).toFixed(0)}K – ${(p.band2575![1] / 1000).toFixed(0)}K
+                            </div>
+                            <div style={{ color: 'rgba(167,139,250,0.8)' }}>
+                              10–90th ${(p.band1090[0] / 1000).toFixed(0)}K – ${(p.band1090[1] / 1000).toFixed(0)}K
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                <Area
+                  dataKey="band1090"
+                  stroke="none"
+                  fill="rgba(139,92,246,0.2)"
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+                <Area
+                  dataKey="band2575"
+                  stroke="none"
+                  fill="rgba(139,92,246,0.45)"
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+                <Line
+                  dataKey="price"
+                  stroke="#fbbf24"
+                  strokeWidth={1.5}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-[10px] mt-1" style={{ color: 'var(--faint)' }}>
+            {scenario.pathCount} paths = BTC&rsquo;s 3y trajectory after each completed NAS100/BTC
+            episode ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80 and
+            replayed from spot. Replays of history that all resolved favorably — no failed-signal
+            distribution, not a prediction.
+          </p>
         </div>
       )}
 

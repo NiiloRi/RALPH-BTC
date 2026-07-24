@@ -17,6 +17,7 @@ export type UserStatus = 'pending' | 'active' | 'disabled';
  */
 export const OVERVIEW_CARDS = [
   { key: 'riskStrip', label: 'Risk-colored price (12 months)' },
+  { key: 'scenario', label: 'Scenario ensemble (3-year bands)' },
   { key: 'fan', label: 'Quantile fan (12 months)' },
   { key: 'powerLaw', label: 'Power law mini' },
   { key: 's2f', label: 'Stock-to-flow mini' },
@@ -28,7 +29,7 @@ export type OverviewCardPrefs = Record<OverviewCardKey, boolean>;
 
 /** Default: everything visible (matches pre-preferences behavior). */
 export function defaultOverviewCards(): OverviewCardPrefs {
-  return { riskStrip: true, fan: true, powerLaw: true, s2f: true, difficulty: true };
+  return { riskStrip: true, scenario: true, fan: true, powerLaw: true, s2f: true, difficulty: true };
 }
 
 /** Merge stored prefs over defaults (missing/new keys default to visible). */
@@ -123,6 +124,7 @@ export const registerSchema = z
 
 export const overviewCardsSchema = z.object({
   riskStrip: z.boolean(),
+  scenario: z.boolean(),
   fan: z.boolean(),
   powerLaw: z.boolean(),
   s2f: z.boolean(),

@@ -37,7 +37,9 @@ import { calculateAllTopProximity } from '@/lib/adjusted/top-proximity';
 import PowerLawChart from './PowerLawChart';
 import S2FChart from './S2FChart';
 import DifficultyChart from './DifficultyChart';
-import CycleLowRadarChart from './CycleLowRadarChart';
+import CycleLowRadarChart, { type RadarApi } from './CycleLowRadarChart';
+import { buildScenarioEnsemble } from '@/lib/models/scenario-ensemble';
+import { weeklyCloses } from '@/lib/models/cycle-low-radar';
 import { fitPowerLaw, evaluatePowerLaw } from '@/lib/models/power-law';
 import { fitS2F, evaluateS2F } from '@/lib/models/s2f';
 import {
@@ -46,7 +48,7 @@ import {
   evaluateDifficultyModel,
 } from '@/lib/models/difficulty';
 import type { DifficultyPoint } from '@/lib/data/difficulty-fetcher';
-import type { ModelsYearRow } from './VerdictHero';
+import type { ModelsYearRow, ScenarioRow } from './VerdictHero';
 import { type OverviewCardPrefs } from '@/lib/auth/types';
 
 interface UIDataPoint {
@@ -295,6 +297,10 @@ export default function RiskDashboard() {
   // Network difficulty history (blockchain.info via our cached API route).
   // Non-blocking: charts and hero minis degrade gracefully while null.
   const [difficultySeries, setDifficultySeries] = useState<DifficultyPoint[] | null>(null);
+  // Cycle Low Radar external series (shared by the radar tab and the hero
+  // scenario-ensemble strip). Non-blocking; consumers degrade while null.
+  const [radarData, setRadarData] = useState<RadarApi | null>(null);
+  const [radarFailed, setRadarFailed] = useState(false);
   // Per-user overview-card preferences (null until loaded → hero uses defaults)
   const [overviewCards, setOverviewCards] = useState<OverviewCardPrefs | null>(null);
   // Default to the last year on mobile (the full 5000+ day view is illegible
@@ -462,6 +468,22 @@ export default function RiskDashboard() {
       .catch(() => {
         /* defaults (all cards visible) apply */
       });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Radar external series — non-blocking, shared by tab + hero strip.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/radar')
+      .then(res => (res.ok ? res.json() : null))
+      .then(json => {
+        if (cancelled) return;
+        if (json && Array.isArray(json.ndx)) setRadarData(json);
+        else setRadarFailed(true);
+      })
+      .catch(() => !cancelled && setRadarFailed(true));
     return () => {
       cancelled = true;
     };
@@ -813,6 +835,27 @@ export default function RiskDashboard() {
     }
   }, [fanSeries, difficultySeries]);
 
+  // Hero scenario ensemble: scaled replays of post-signal 3-year paths
+  // (Blockworks methodology; lib/models/scenario-ensemble.ts). ~130 weeks of
+  // history + 156-week forward bands. Null until radar data lands.
+  const heroScenario = useMemo(() => {
+    if (!radarData || fanSeries.length < 500) return null;
+    try {
+      const daily = fanSeries.map(s => ({ date: s.date, value: s.close }));
+      const ensemble = buildScenarioEnsemble(daily, radarData.ndx);
+      if (!ensemble) return null;
+      // chart rows: ~130 weeks of history (price only) + forward bands
+      const history = weeklyCloses(daily).slice(-130);
+      const rows: ScenarioRow[] = history.map(h => ({ date: h.date, price: h.value }));
+      for (const b of ensemble.bands) {
+        rows.push({ date: b.date, band1090: [b.p10, b.p90], band2575: [b.p25, b.p75] });
+      }
+      return { rows, anchors: ensemble.anchors, pathCount: ensemble.pathCount };
+    } catch {
+      return null;
+    }
+  }, [radarData, fanSeries]);
+
   // Hero mini-fan: last 12 months of the quantile fan. Same deterministic
   // full-sample fit as the big fan chart (fit is ~60ms, memoized on data).
   const heroFanYear = useMemo((): FanYearRow[] => {
@@ -890,7 +933,9 @@ export default function RiskDashboard() {
       {activeTab === 'difficulty' && (
         <DifficultyChart series={fanSeries} difficulty={difficultySeries} />
       )}
-      {activeTab === 'radar' && <CycleLowRadarChart series={fanSeries} />}
+      {activeTab === 'radar' && (
+        <CycleLowRadarChart series={fanSeries} radar={radarData} radarFailed={radarFailed} />
+      )}
 
       {/* Overview (front page): verdict hero + collapsible breakdown */}
       {activeTab === 'overview' && (
@@ -910,6 +955,7 @@ export default function RiskDashboard() {
         fanYear={heroFanYear}
         riskYear={heroRiskYear}
         modelsYear={heroModelsYear}
+        scenario={heroScenario}
         cards={overviewCards ?? undefined}
         adjusted={latestAdjusted}
         divergence={divergence}
