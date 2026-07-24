@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/current-user';
+import { resolveOverviewCards } from '@/lib/auth/types';
 import ChangePasswordForm from './change-password-form';
+import OverviewCardsForm from './overview-cards-form';
 
 export const metadata = { title: 'Account — BTC Risk Metric' };
 export const dynamic = 'force-dynamic';
@@ -27,6 +29,14 @@ export default async function AccountPage() {
         </p>
         <div
           className="mt-8 border rounded-lg p-6"
+          style={{ background: 'var(--surface)', borderColor: 'var(--hairline)' }}
+        >
+          <h2 className="text-sm font-medium mb-4">Overview layout</h2>
+          <OverviewCardsForm initial={resolveOverviewCards(user.preferences?.overviewCards)} />
+        </div>
+
+        <div
+          className="mt-6 border rounded-lg p-6"
           style={{ background: 'var(--surface)', borderColor: 'var(--hairline)' }}
         >
           <h2 className="text-sm font-medium mb-4">Change password</h2>

@@ -12,8 +12,10 @@ import {
   deleteUser,
   updatePassword,
   recordLogin,
+  updatePreferences,
   UsernameTakenError,
 } from './user-store';
+import { resolveOverviewCards, defaultOverviewCards } from './types';
 import { verifyPassword } from './password';
 
 let dir: string;
@@ -139,6 +141,32 @@ describe('status transitions & tokenVersion', () => {
     const admin = await getUserByUsername('Niilo');
     await recordLogin(admin!.id);
     expect((await getUserById(admin!.id))!.lastLoginAt).toBeDefined();
+  });
+});
+
+describe('preferences', () => {
+  it('persists overview-card prefs without bumping tokenVersion', async () => {
+    await ensureSeeded();
+    const admin = await getUserByUsername('Niilo');
+    const before = admin!.tokenVersion;
+    await updatePreferences(admin!.id, {
+      overviewCards: { fan: false, difficulty: false },
+    });
+    const after = await getUserById(admin!.id);
+    expect(after!.preferences?.overviewCards).toEqual({ fan: false, difficulty: false });
+    expect(after!.tokenVersion).toBe(before); // sessions stay valid
+  });
+
+  it('resolveOverviewCards merges partial prefs over all-visible defaults', () => {
+    expect(resolveOverviewCards(undefined)).toEqual(defaultOverviewCards());
+    expect(resolveOverviewCards({ fan: false })).toEqual({
+      ...defaultOverviewCards(),
+      fan: false,
+    });
+  });
+
+  it('throws for unknown user', async () => {
+    await expect(updatePreferences('nope', { overviewCards: {} })).rejects.toThrow(/No such user/);
   });
 });
 

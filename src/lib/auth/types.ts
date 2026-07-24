@@ -11,6 +11,35 @@ import { z } from 'zod';
 export type UserRole = 'admin' | 'user';
 export type UserStatus = 'pending' | 'active' | 'disabled';
 
+/**
+ * Overview cards the user can show/hide. The main verdict card is always
+ * visible for everyone and deliberately NOT in this list.
+ */
+export const OVERVIEW_CARDS = [
+  { key: 'riskStrip', label: 'Risk-colored price (12 months)' },
+  { key: 'fan', label: 'Quantile fan (12 months)' },
+  { key: 'powerLaw', label: 'Power law mini' },
+  { key: 's2f', label: 'Stock-to-flow mini' },
+  { key: 'difficulty', label: 'Difficulty mini' },
+] as const;
+
+export type OverviewCardKey = (typeof OVERVIEW_CARDS)[number]['key'];
+export type OverviewCardPrefs = Record<OverviewCardKey, boolean>;
+
+/** Default: everything visible (matches pre-preferences behavior). */
+export function defaultOverviewCards(): OverviewCardPrefs {
+  return { riskStrip: true, fan: true, powerLaw: true, s2f: true, difficulty: true };
+}
+
+/** Merge stored prefs over defaults (missing/new keys default to visible). */
+export function resolveOverviewCards(stored?: Partial<OverviewCardPrefs>): OverviewCardPrefs {
+  return { ...defaultOverviewCards(), ...(stored ?? {}) };
+}
+
+export interface UserPreferences {
+  overviewCards?: Partial<OverviewCardPrefs>;
+}
+
 export interface UserRecord {
   id: string;
   /** Display form, as typed at registration */
@@ -27,6 +56,8 @@ export interface UserRecord {
   lastLoginAt?: string;
   registrationIp?: string;
   registrationUserAgent?: string;
+  /** Per-user UI preferences (e.g. which overview cards are visible) */
+  preferences?: UserPreferences;
 }
 
 /** Session cookie JWT claims */
@@ -89,6 +120,14 @@ export const registerSchema = z
     message: 'Passwords do not match',
     path: ['confirm'],
   });
+
+export const overviewCardsSchema = z.object({
+  riskStrip: z.boolean(),
+  fan: z.boolean(),
+  powerLaw: z.boolean(),
+  s2f: z.boolean(),
+  difficulty: z.boolean(),
+});
 
 export const changePasswordSchema = z
   .object({

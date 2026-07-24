@@ -5,12 +5,27 @@ import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/current-user';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from '@/lib/auth/session';
-import { changePasswordSchema } from '@/lib/auth/types';
-import { updatePassword } from '@/lib/auth/user-store';
+import { changePasswordSchema, overviewCardsSchema, type OverviewCardPrefs } from '@/lib/auth/types';
+import { updatePassword, updatePreferences } from '@/lib/auth/user-store';
 
 export async function logoutAction(): Promise<void> {
   (await cookies()).delete(SESSION_COOKIE);
   redirect('/login');
+}
+
+/**
+ * Persist which overview cards are visible for this user. Called
+ * programmatically from the settings toggles (optimistic client state,
+ * fire-and-forget persistence). Re-authenticates like every action.
+ */
+export async function updateOverviewCardsAction(
+  cards: OverviewCardPrefs
+): Promise<{ error?: string }> {
+  const user = await requireUser();
+  const parsed = overviewCardsSchema.safeParse(cards);
+  if (!parsed.success) return { error: 'Invalid preferences' };
+  await updatePreferences(user.id, { overviewCards: parsed.data });
+  return {};
 }
 
 export interface ChangePasswordState {

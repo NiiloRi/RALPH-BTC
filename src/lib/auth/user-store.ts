@@ -222,6 +222,20 @@ export async function updatePassword(id: string, newHash: string): Promise<numbe
   });
 }
 
+/** Merge UI preferences (no tokenVersion bump — sessions stay valid). */
+export async function updatePreferences(
+  id: string,
+  preferences: UserRecord['preferences']
+): Promise<void> {
+  await withLock(() => {
+    const { users } = readStore();
+    const user = users.find(u => u.id === id);
+    if (!user) throw new Error(`No such user: ${id}`);
+    user.preferences = { ...user.preferences, ...preferences };
+    writeStore(users);
+  });
+}
+
 export async function recordLogin(id: string): Promise<void> {
   await withLock(() => {
     const { users } = readStore();
