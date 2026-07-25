@@ -934,7 +934,7 @@ export default function RiskDashboard() {
         <DifficultyChart series={fanSeries} difficulty={difficultySeries} />
       )}
       {activeTab === 'radar' && (
-        <CycleLowRadarChart series={fanSeries} radar={radarData} radarFailed={radarFailed} />
+        <CycleLowRadarChart series={fanSeries} radar={radarData} radarFailed={radarFailed} scenario={heroScenario} />
       )}
 
       {/* Overview (front page): verdict hero + collapsible breakdown */}

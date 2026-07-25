@@ -17,6 +17,7 @@ import { useMemo } from 'react';
 import {
   ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   Tooltip,
@@ -24,6 +25,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { computeRadar, type Point, type RadarResult } from '@/lib/models/cycle-low-radar';
+import type { ScenarioProp, ScenarioRow } from './VerdictHero';
 
 interface SeriesPoint {
   date: string;
@@ -55,11 +57,14 @@ export default function CycleLowRadarChart({
   series,
   radar: external,
   radarFailed: failed,
+  scenario = null,
 }: {
   series: SeriesPoint[];
   /** external series fetched once by RiskDashboard (shared with the hero) */
   radar: RadarApi | null;
   radarFailed: boolean;
+  /** scenario ensemble computed by RiskDashboard (shared with the hero strip) */
+  scenario?: ScenarioProp | null;
 }) {
 
   const result: RadarResult | null = useMemo(() => {
@@ -297,6 +302,70 @@ export default function CycleLowRadarChart({
           <span key={p.label} className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: PRIOR_COLORS[i % PRIOR_COLORS.length] }} />{p.label} cycle</span>
         ))}
       </div>
+
+      {/* 4 · scenario ensemble — same construction as the hero strip */}
+      {scenario && scenario.rows.length >= 60 && (
+        <>
+          <div className="text-[10px] uppercase tracking-[0.14em] mt-6 mb-1" style={{ color: 'var(--faint)' }}>
+            BTC: scenario ensemble · scaled post-signal path replays · 3y forward · log
+          </div>
+          <div className="h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={scenario.rows} margin={{ top: 6, right: 12, left: 0, bottom: 2 }}>
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={fmtYear}
+                  stroke="#4b5563"
+                  tick={{ fill: '#8a877f', fontSize: 10 }}
+                  interval="preserveStartEnd"
+                  minTickGap={60}
+                />
+                <YAxis
+                  scale="log"
+                  domain={['auto', 'auto']}
+                  tickFormatter={fmtPrice}
+                  stroke="#4b5563"
+                  tick={{ fill: '#8a877f', fontSize: 10 }}
+                  width={52}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const p = payload[0].payload as ScenarioRow;
+                    return (
+                      <div className="rounded border px-2.5 py-1.5 text-[11px]" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+                        <div style={{ color: 'var(--foreground)' }}>{p.date}</div>
+                        {p.price !== undefined && (
+                          <div style={{ color: '#fbbf24' }}>close {fmtPrice(p.price)}</div>
+                        )}
+                        {p.band1090 && p.band2575 && (
+                          <>
+                            <div style={{ color: 'rgba(196,181,253,1)' }}>25–75th {fmtPrice(p.band2575[0])} – {fmtPrice(p.band2575[1])}</div>
+                            <div style={{ color: 'rgba(167,139,250,0.8)' }}>10–90th {fmtPrice(p.band1090[0])} – {fmtPrice(p.band1090[1])}</div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                <Area dataKey="band1090" stroke="none" fill="rgba(139,92,246,0.2)" isAnimationActive={false} connectNulls={false} />
+                <Area dataKey="band2575" stroke="none" fill="rgba(139,92,246,0.45)" isAnimationActive={false} connectNulls={false} />
+                <Line dataKey="price" stroke="#fbbf24" strokeWidth={1.5} dot={false} connectNulls={false} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 justify-center text-[11px]" style={{ color: 'var(--muted)' }}>
+            <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 rounded" style={{ background: '#fbbf24' }} />BTC close</span>
+            <span className="flex items-center gap-1.5"><span className="w-4 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.2)' }} />10–90th percentile</span>
+            <span className="flex items-center gap-1.5"><span className="w-4 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.45)' }} />25–75th percentile</span>
+          </div>
+          <p className="text-[10px] mt-1 text-center" style={{ color: 'var(--faint)' }}>
+            {scenario.pathCount} paths: BTC&rsquo;s 3y trajectory after each completed NAS100/BTC episode
+            ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80, replayed from spot —
+            replays of favorable history, no failed-signal distribution, not a prediction.
+          </p>
+        </>
+      )}
 
       {/* honesty footnotes */}
       <div className="mt-5 grid gap-2 text-[12px] leading-relaxed border-t pt-4" style={{ color: 'var(--muted)', borderColor: 'var(--hairline)' }}>
