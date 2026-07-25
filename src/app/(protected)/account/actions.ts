@@ -5,7 +5,13 @@ import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/current-user';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from '@/lib/auth/session';
-import { changePasswordSchema, overviewCardsSchema, type OverviewCardPrefs } from '@/lib/auth/types';
+import {
+  changePasswordSchema,
+  overviewCardsSchema,
+  scenarioAnchorSchema,
+  type OverviewCardPrefs,
+  type ScenarioAnchorPref,
+} from '@/lib/auth/types';
 import { updatePassword, updatePreferences } from '@/lib/auth/user-store';
 
 export async function logoutAction(): Promise<void> {
@@ -25,6 +31,17 @@ export async function updateOverviewCardsAction(
   const parsed = overviewCardsSchema.safeParse(cards);
   if (!parsed.success) return { error: 'Invalid preferences' };
   await updatePreferences(user.id, { overviewCards: parsed.data });
+  return {};
+}
+
+/** Persist the scenario-ensemble anchoring preference (frozen vs rolling). */
+export async function updateScenarioAnchorAction(
+  anchor: ScenarioAnchorPref
+): Promise<{ error?: string }> {
+  const user = await requireUser();
+  const parsed = scenarioAnchorSchema.safeParse(anchor);
+  if (!parsed.success) return { error: 'Invalid preference' };
+  await updatePreferences(user.id, { scenarioAnchor: parsed.data });
   return {};
 }
 

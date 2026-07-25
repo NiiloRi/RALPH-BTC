@@ -27,6 +27,8 @@ import {
 import ShareChartButton from './ShareChartButton';
 import { computeRadar, type Point, type RadarResult } from '@/lib/models/cycle-low-radar';
 import type { ScenarioProp, ScenarioRow } from './VerdictHero';
+import type { ScenarioAnchorPref } from '@/lib/auth/types';
+import { Segmented } from './chart-ui';
 
 interface SeriesPoint {
   date: string;
@@ -59,6 +61,8 @@ export default function CycleLowRadarChart({
   radar: external,
   radarFailed: failed,
   scenario = null,
+  scenarioAnchor = 'episode',
+  onScenarioAnchorChange,
 }: {
   series: SeriesPoint[];
   /** external series fetched once by RiskDashboard (shared with the hero) */
@@ -66,6 +70,9 @@ export default function CycleLowRadarChart({
   radarFailed: boolean;
   /** scenario ensemble computed by RiskDashboard (shared with the hero strip) */
   scenario?: ScenarioProp | null;
+  /** per-user anchoring preference; the Overview strip follows the same state */
+  scenarioAnchor?: ScenarioAnchorPref;
+  onScenarioAnchorChange?: (v: ScenarioAnchorPref) => void;
 }) {
   const shareRef = useRef<HTMLElement>(null);
 
@@ -311,8 +318,26 @@ export default function CycleLowRadarChart({
       {/* 4 · scenario ensemble — same construction as the hero strip */}
       {scenario && scenario.rows.length >= 60 && (
         <>
-          <div className="text-[10px] uppercase tracking-[0.14em] mt-6 mb-1" style={{ color: 'var(--faint)' }}>
-            BTC: scenario ensemble · scaled post-signal path replays · 3y forward · log
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-6 mb-1">
+            <span className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
+              BTC: scenario ensemble · scaled post-signal path replays · 3y forward · log
+            </span>
+            {onScenarioAnchorChange && (
+              <span className="flex items-center gap-1.5" data-noshare="true">
+                <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: 'var(--faint)' }}>
+                  Anchor
+                </span>
+                <Segmented<ScenarioAnchorPref>
+                  ariaLabel="Scenario anchoring"
+                  options={[
+                    { value: 'episode', label: 'Frozen', title: 'Fixed at the active episode start — realized price tracks against unmoving bands (saved to your account; the Overview strip follows)' },
+                    { value: 'latest', label: 'Live', title: 'Rolling anchor at the newest close — bands slide with spot (saved to your account; the Overview strip follows)' },
+                  ]}
+                  value={scenarioAnchor}
+                  onChange={onScenarioAnchorChange}
+                />
+              </span>
+            )}
           </div>
           <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">

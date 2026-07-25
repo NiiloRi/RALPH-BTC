@@ -16,5 +16,6 @@ export async function GET() {
   }
   return NextResponse.json({
     overviewCards: resolveOverviewCards(user.preferences?.overviewCards),
+    scenarioAnchor: user.preferences?.scenarioAnchor ?? 'episode',
   });
 }

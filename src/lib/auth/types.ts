@@ -37,8 +37,12 @@ export function resolveOverviewCards(stored?: Partial<OverviewCardPrefs>): Overv
   return { ...defaultOverviewCards(), ...(stored ?? {}) };
 }
 
+export type ScenarioAnchorPref = 'episode' | 'latest';
+
 export interface UserPreferences {
   overviewCards?: Partial<OverviewCardPrefs>;
+  /** Scenario-ensemble anchoring: 'episode' = frozen bands (default), 'latest' = rolling */
+  scenarioAnchor?: ScenarioAnchorPref;
 }
 
 export interface UserRecord {
@@ -130,6 +134,8 @@ export const overviewCardsSchema = z.object({
   s2f: z.boolean(),
   difficulty: z.boolean(),
 });
+
+export const scenarioAnchorSchema = z.enum(['episode', 'latest']);
 
 export const changePasswordSchema = z
   .object({

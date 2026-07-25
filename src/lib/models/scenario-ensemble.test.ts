@@ -98,6 +98,16 @@ describe('buildScenarioEnsemble', () => {
     expect(Math.abs(Math.log(wW / spot))).toBeLessThan(Math.abs(Math.log(wS / spot)));
   });
 
+  it("anchorMode 'latest' ignores the active episode (rolling bands)", () => {
+    const { btc: btc2, nas: nas2 } = syntheticWorld(true);
+    const e = buildScenarioEnsemble(btc2, nas2, { anchorMode: 'latest' })!;
+    expect(e.anchorType).toBe('latest');
+    // rolling anchor == last observation; no elapsed overlap
+    const lastDate = btc2[btc2.length - 1].date;
+    expect(e.bands[0].date >= lastDate.slice(0, 8)).toBe(true);
+    expect(e.bands.filter(b => b.date < lastDate).length).toBe(0);
+  });
+
   it('returns null when no completed episodes exist', () => {
     // steady world → ratio RSI never spikes → no episodes
     const flatBtc = daily('2012-01-02', 5200, i => 1000 + i);

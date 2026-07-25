@@ -165,6 +165,16 @@ describe('preferences', () => {
     });
   });
 
+  it('persists scenarioAnchor alongside overviewCards (merge, not overwrite)', async () => {
+    await ensureSeeded();
+    const admin = await getUserByUsername('Niilo');
+    await updatePreferences(admin!.id, { overviewCards: { fan: false } });
+    await updatePreferences(admin!.id, { scenarioAnchor: 'latest' });
+    const after = await getUserById(admin!.id);
+    expect(after!.preferences?.scenarioAnchor).toBe('latest');
+    expect(after!.preferences?.overviewCards).toEqual({ fan: false }); // preserved
+  });
+
   it('throws for unknown user', async () => {
     await expect(updatePreferences('nope', { overviewCards: {} })).rejects.toThrow(/No such user/);
   });

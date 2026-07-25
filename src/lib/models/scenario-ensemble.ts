@@ -72,12 +72,20 @@ export function buildScenarioEnsemble(
     threshold?: number;
     strengths?: number[];
     horizonWeeks?: number;
+    /**
+     * 'episode' (default): FIXED anchor at the active episode's first weekly
+     * close >= threshold — bands stay put, realized price tracks into them.
+     * 'latest': rolling anchor at the newest close — bands slide with spot
+     * (the original live behavior).
+     */
+    anchorMode?: 'episode' | 'latest';
   } = {}
 ): ScenarioEnsemble | null {
   const {
     threshold = 66,
     strengths = DEFAULT_STRENGTHS,
     horizonWeeks = DEFAULT_HORIZON_WEEKS,
+    anchorMode = 'episode',
   } = options;
 
   const btcWeekly = weeklyCloses(btcDaily);
@@ -111,7 +119,7 @@ export function buildScenarioEnsemble(
   // else the latest observation (previous behavior).
   let anchorIdx = btcWeekly.length - 1;
   let anchorType: ScenarioEnsemble['anchorType'] = 'latest';
-  if (active) {
+  if (anchorMode === 'episode' && active) {
     const idx = btcWeekly.findIndex(p => p.date >= active.start);
     if (idx >= 0) {
       anchorIdx = idx;

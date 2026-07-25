@@ -50,7 +50,8 @@ import {
 } from '@/lib/models/difficulty';
 import type { DifficultyPoint } from '@/lib/data/difficulty-fetcher';
 import type { ModelsYearRow, ScenarioRow } from './VerdictHero';
-import { type OverviewCardPrefs } from '@/lib/auth/types';
+import { type OverviewCardPrefs, type ScenarioAnchorPref } from '@/lib/auth/types';
+import { updateScenarioAnchorAction } from '@/app/(protected)/account/actions';
 
 interface UIDataPoint {
   date: string;
@@ -304,6 +305,8 @@ export default function RiskDashboard() {
   const [radarFailed, setRadarFailed] = useState(false);
   // Per-user overview-card preferences (null until loaded → hero uses defaults)
   const [overviewCards, setOverviewCards] = useState<OverviewCardPrefs | null>(null);
+  // Scenario-ensemble anchoring — per-user preference ('episode' = frozen bands)
+  const [scenarioAnchor, setScenarioAnchor] = useState<ScenarioAnchorPref>('episode');
   // Default to the last year on mobile (the full 5000+ day view is illegible
   // on a phone); desktop shows all history. Applied via a matchMedia listener
   // (robust to load-time viewport timing) until the user picks a range.
@@ -465,7 +468,11 @@ export default function RiskDashboard() {
     fetch('/api/preferences')
       .then(res => (res.ok ? res.json() : null))
       .then(json => {
-        if (!cancelled && json?.overviewCards) setOverviewCards(json.overviewCards);
+        if (cancelled || !json) return;
+        if (json.overviewCards) setOverviewCards(json.overviewCards);
+        if (json.scenarioAnchor === 'latest' || json.scenarioAnchor === 'episode') {
+          setScenarioAnchor(json.scenarioAnchor);
+        }
       })
       .catch(() => {
         /* defaults (all cards visible) apply */
@@ -596,6 +603,15 @@ export default function RiskDashboard() {
 
     return result;
   }, [data, timeRange, zoomStart, zoomEnd]);
+
+  // Toggle + persist the scenario anchoring preference (optimistic; used by
+  // the Cycle Low Radar tab control — the hero strip follows the same state).
+  const changeScenarioAnchor = (v: ScenarioAnchorPref) => {
+    setScenarioAnchor(v);
+    void updateScenarioAnchorAction(v).catch(() => {
+      /* persistence failed — the in-session choice still applies */
+    });
+  };
 
   // Zoom handlers
   const handleMouseDown = (e: { activeLabel?: string | number }) => {
@@ -844,7 +860,7 @@ export default function RiskDashboard() {
     if (!radarData || fanSeries.length < 500) return null;
     try {
       const daily = fanSeries.map(s => ({ date: s.date, value: s.close }));
-      const ensemble = buildScenarioEnsemble(daily, radarData.ndx);
+      const ensemble = buildScenarioEnsemble(daily, radarData.ndx, { anchorMode: scenarioAnchor });
       if (!ensemble) return null;
       // chart rows: ~130 weeks of realized weekly closes, with band fields
       // merged onto the overlap (anchor → today) so the realized line rides
@@ -875,7 +891,7 @@ export default function RiskDashboard() {
     } catch {
       return null;
     }
-  }, [radarData, fanSeries]);
+  }, [radarData, fanSeries, scenarioAnchor]);
 
   // Hero mini-fan: last 12 months of the quantile fan. Same deterministic
   // full-sample fit as the big fan chart (fit is ~60ms, memoized on data).
@@ -955,7 +971,14 @@ export default function RiskDashboard() {
         <DifficultyChart series={fanSeries} difficulty={difficultySeries} />
       )}
       {activeTab === 'radar' && (
-        <CycleLowRadarChart series={fanSeries} radar={radarData} radarFailed={radarFailed} scenario={heroScenario} />
+        <CycleLowRadarChart
+          series={fanSeries}
+          radar={radarData}
+          radarFailed={radarFailed}
+          scenario={heroScenario}
+          scenarioAnchor={scenarioAnchor}
+          onScenarioAnchorChange={changeScenarioAnchor}
+        />
       )}
 
       {/* Overview (front page): verdict hero + collapsible breakdown */}
