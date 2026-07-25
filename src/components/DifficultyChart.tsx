@@ -13,7 +13,7 @@
  * schedule or pure time. The footnote says so.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ComposedChart,
   Line,
@@ -23,6 +23,7 @@ import {
   ReferenceArea,
   ResponsiveContainer,
 } from 'recharts';
+import ShareChartButton from './ShareChartButton';
 import {
   joinDifficultyToPrices,
   fitDifficultyModel,
@@ -92,6 +93,7 @@ export default function DifficultyChart({
   series: SeriesPoint[];
   difficulty: DifficultyPoint[] | null;
 }) {
+  const shareRef = useRef<HTMLElement>(null);
   const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
@@ -187,12 +189,13 @@ export default function DifficultyChart({
   const m = fitted.model;
 
   return (
-    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section ref={shareRef} className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
           Difficulty
         </h3>
         <div className="flex items-center gap-3">
+          <ShareChartButton targetRef={shareRef} title="BTC Difficulty model" filenamePrefix="btc-difficulty" />
           {zoom && (
             <button
               onClick={() => setZoom(null)}

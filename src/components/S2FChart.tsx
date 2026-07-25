@@ -11,7 +11,7 @@
  * steps up by 2^b. That visible step IS the projection's point.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ComposedChart,
   Line,
@@ -22,6 +22,7 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
+import ShareChartButton from './ShareChartButton';
 import {
   fitS2F,
   evaluateS2F,
@@ -89,6 +90,7 @@ function S2FTooltip({ active, payload }: { active?: boolean; payload?: Array<{ p
 }
 
 export default function S2FChart({ series }: { series: SeriesPoint[] }) {
+  const shareRef = useRef<HTMLElement>(null);
   const [project, setProject] = useState(false);
   const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
@@ -168,12 +170,13 @@ export default function S2FChart({ series }: { series: SeriesPoint[] }) {
   const dev = latest.close / latestModel - 1;
 
   return (
-    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section ref={shareRef} className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
           Stock-to-flow
         </h3>
         <div className="flex items-center gap-3">
+          <ShareChartButton targetRef={shareRef} title="BTC Stock-to-flow" filenamePrefix="btc-s2f" />
           {zoom && (
             <button
               onClick={() => setZoom(null)}

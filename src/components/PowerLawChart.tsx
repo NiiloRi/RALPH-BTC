@@ -11,7 +11,7 @@
  * descriptive fit — never a forecast; the UI says so.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ComposedChart,
   Line,
@@ -23,6 +23,7 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
+import ShareChartButton from './ShareChartButton';
 import { fitPowerLaw, evaluatePowerLaw, type PowerLawModel } from '@/lib/models/power-law';
 import { NEXT_HALVING_ESTIMATE, NEXT_HALVING_ESTIMATE_2 } from '@/lib/models/s2f';
 import { projectionDates, addDays } from '@/lib/models/projection';
@@ -119,6 +120,7 @@ function PLTooltip({
 }
 
 export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
+  const shareRef = useRef<HTMLElement>(null);
   const [horizon, setHorizon] = useState<Horizon>('off');
   const [showEnvelope, setShowEnvelope] = useState(false);
   // Bitbo-style quick view: last ~5y of data (+ any active projection)
@@ -212,12 +214,13 @@ export default function PowerLawChart({ series }: { series: SeriesPoint[] }) {
   const dev = latest.close / latestFair.fair - 1;
 
   return (
-    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section ref={shareRef} className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
           Power law
         </h3>
         <div className="flex items-center gap-3">
+          <ShareChartButton targetRef={shareRef} title="BTC Power law" filenamePrefix="btc-powerlaw" />
           {zoom && (
             <button
               onClick={() => setZoom(null)}

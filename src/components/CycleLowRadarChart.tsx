@@ -13,7 +13,7 @@
  * NOT independent — the footnotes carry the source report's own limitations.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import {
   ComposedChart,
   Line,
@@ -24,6 +24,7 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
+import ShareChartButton from './ShareChartButton';
 import { computeRadar, type Point, type RadarResult } from '@/lib/models/cycle-low-radar';
 import type { ScenarioProp, ScenarioRow } from './VerdictHero';
 
@@ -66,6 +67,7 @@ export default function CycleLowRadarChart({
   /** scenario ensemble computed by RiskDashboard (shared with the hero strip) */
   scenario?: ScenarioProp | null;
 }) {
+  const shareRef = useRef<HTMLElement>(null);
 
   const result: RadarResult | null = useMemo(() => {
     if (!external || series.length < 200) return null;
@@ -153,13 +155,16 @@ export default function CycleLowRadarChart({
   const tailCount = result.signals.filter(s => s.inTail).length;
 
   return (
-    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section ref={shareRef} className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
           Cycle Low Radar
         </h3>
-        <span className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
-          condition basket · descriptive, not a signal service
+        <span className="flex items-center gap-3">
+          <ShareChartButton targetRef={shareRef} title="BTC Cycle Low Radar" filenamePrefix="btc-cycle-low-radar" />
+          <span className="text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>
+            condition basket · descriptive, not a signal service
+          </span>
         </span>
       </div>
       <p className="text-[12px] mb-4" style={{ color: 'var(--muted)' }}>
@@ -361,7 +366,9 @@ export default function CycleLowRadarChart({
           </div>
           <p className="text-[10px] mt-1 text-center" style={{ color: 'var(--faint)' }}>
             {scenario.pathCount} paths: BTC&rsquo;s 3y trajectory after each completed NAS100/BTC episode
-            ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80, replayed from spot —
+            ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80, replayed from the
+            fixed anchor {scenario.anchorDate}
+            {scenario.anchorType === 'active-episode' ? ' (active episode start — realized price tracks against frozen bands)' : ' (latest close)'} —
             replays of favorable history, no failed-signal distribution, not a prediction.
           </p>
         </>

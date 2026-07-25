@@ -42,7 +42,18 @@ export interface ScenarioEnsemble {
   /** completed-episode anchor dates the paths replay from */
   anchors: string[];
   pathCount: number;
-  /** weekly bands from the last observation (w=0, all == spot) forward */
+  /**
+   * The FIXED point the ensemble is anchored at. When a NAS100/BTC episode is
+   * active, this is its first weekly close >= threshold — the same marking
+   * rule the report uses for its forward-return tables. The anchor does not
+   * move as new data arrives, so the realized price advances INTO the bands
+   * and projection tracking can be studied. Fallback (no active episode):
+   * the latest observation.
+   */
+  anchorDate: string;
+  anchorPrice: number;
+  anchorType: 'active-episode' | 'latest';
+  /** weekly bands from the anchor (w=0, all == anchorPrice) forward */
   bands: EnsembleBands[];
 }
 
@@ -72,9 +83,12 @@ export function buildScenarioEnsemble(
   const btcWeekly = weeklyCloses(btcDaily);
   if (btcWeekly.length < horizonWeeks + 60) return null;
 
-  // Completed anchor episodes on the NAS100/BTC RSI-MA
+  // Episodes on the NAS100/BTC RSI-MA: completed ones supply the replayed
+  // trajectories; an ACTIVE one supplies the fixed anchor point.
   const rsiMa = ratioRsiMa(nasWeekly, btcWeekly);
-  const completed = findEpisodes(rsiMa, threshold).filter(e => !e.active);
+  const allEpisodes = findEpisodes(rsiMa, threshold);
+  const completed = allEpisodes.filter(e => !e.active);
+  const active = allEpisodes.find(e => e.active);
   if (completed.length === 0) return null;
 
   // Historical weekly log-trajectories from each anchor, full horizon required
@@ -93,21 +107,38 @@ export function buildScenarioEnsemble(
   }
   if (trajectories.length === 0) return null;
 
-  const last = btcWeekly[btcWeekly.length - 1];
-  const spot = last.value;
-  const lastMs = new Date(last.date).getTime();
+  // Fixed anchor: the active episode's first weekly close >= threshold,
+  // else the latest observation (previous behavior).
+  let anchorIdx = btcWeekly.length - 1;
+  let anchorType: ScenarioEnsemble['anchorType'] = 'latest';
+  if (active) {
+    const idx = btcWeekly.findIndex(p => p.date >= active.start);
+    if (idx >= 0) {
+      anchorIdx = idx;
+      anchorType = 'active-episode';
+    }
+  }
+  const anchor = btcWeekly[anchorIdx];
+  const anchorMs = new Date(anchor.date).getTime();
+  const lastIdx = btcWeekly.length - 1;
 
   const bands: EnsembleBands[] = [];
   for (let w = 0; w <= horizonWeeks; w++) {
     const values: number[] = [];
     for (const traj of trajectories) {
       for (const s of strengths) {
-        values.push(spot * Math.exp(s * traj[w]));
+        values.push(anchor.value * Math.exp(s * traj[w]));
       }
     }
     values.sort((a, b) => a - b);
+    // Elapsed weeks reuse the ACTUAL weekly-close dates so the realized price
+    // rows join the band rows exactly; future weeks step by calendar weeks.
+    const date =
+      anchorIdx + w <= lastIdx
+        ? btcWeekly[anchorIdx + w].date
+        : new Date(anchorMs + w * MS_PER_WEEK).toISOString().split('T')[0];
     bands.push({
-      date: new Date(lastMs + w * MS_PER_WEEK).toISOString().split('T')[0],
+      date,
       p10: quantile(values, 0.1),
       p25: quantile(values, 0.25),
       p75: quantile(values, 0.75),
@@ -115,5 +146,12 @@ export function buildScenarioEnsemble(
     });
   }
 
-  return { anchors, pathCount: trajectories.length * strengths.length, bands };
+  return {
+    anchors,
+    pathCount: trajectories.length * strengths.length,
+    anchorDate: anchor.date,
+    anchorPrice: anchor.value,
+    anchorType,
+    bands,
+  };
 }

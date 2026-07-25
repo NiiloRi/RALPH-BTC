@@ -22,6 +22,7 @@ import {
   buildRiskGradientStops,
 } from '@/lib/risk/color-scale';
 import { C, Segmented, Toggle } from './chart-ui';
+import ShareChartButton from './ShareChartButton';
 import MetaLayersPanel from './MetaLayersPanel';
 import { calculateSimplifiedMetaLayers, MetaLayersOutput } from '@/lib/meta';
 import { getRiskBand, RISK_BANDS } from '@/lib/risk/bands';
@@ -308,6 +309,7 @@ export default function RiskDashboard() {
   // (robust to load-time viewport timing) until the user picks a range.
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const userPickedRange = useRef(false);
+  const riskChartRef = useRef<HTMLDivElement>(null);
   const [showSmoothed, setShowSmoothed] = useState(true);
   // Simple moving average (days) applied to the risk line. Default 7d so the
   // curve is legible out of the box; 1 = off. Numeric — replaced the old slider.
@@ -844,13 +846,32 @@ export default function RiskDashboard() {
       const daily = fanSeries.map(s => ({ date: s.date, value: s.close }));
       const ensemble = buildScenarioEnsemble(daily, radarData.ndx);
       if (!ensemble) return null;
-      // chart rows: ~130 weeks of history (price only) + forward bands
+      // chart rows: ~130 weeks of realized weekly closes, with band fields
+      // merged onto the overlap (anchor → today) so the realized line rides
+      // INSIDE the frozen bands; then future band-only rows.
+      const bandsByDate = new Map(ensemble.bands.map(b => [b.date, b]));
       const history = weeklyCloses(daily).slice(-130);
-      const rows: ScenarioRow[] = history.map(h => ({ date: h.date, price: h.value }));
+      const rows: ScenarioRow[] = history.map(h => {
+        const b = bandsByDate.get(h.date);
+        return {
+          date: h.date,
+          price: h.value,
+          ...(b ? { band1090: [b.p10, b.p90] as [number, number], band2575: [b.p25, b.p75] as [number, number] } : {}),
+        };
+      });
+      const lastHistoryDate = history[history.length - 1]?.date ?? '';
       for (const b of ensemble.bands) {
-        rows.push({ date: b.date, band1090: [b.p10, b.p90], band2575: [b.p25, b.p75] });
+        if (b.date > lastHistoryDate) {
+          rows.push({ date: b.date, band1090: [b.p10, b.p90], band2575: [b.p25, b.p75] });
+        }
       }
-      return { rows, anchors: ensemble.anchors, pathCount: ensemble.pathCount };
+      return {
+        rows,
+        anchors: ensemble.anchors,
+        pathCount: ensemble.pathCount,
+        anchorDate: ensemble.anchorDate,
+        anchorType: ensemble.anchorType,
+      };
     } catch {
       return null;
     }
@@ -1144,6 +1165,7 @@ export default function RiskDashboard() {
 
       {/* Main Chart — the central analytical workspace */}
       <div
+        ref={riskChartRef}
         className="rounded-xl border p-2 sm:p-5"
         style={{ borderColor: 'var(--hairline)', background: 'var(--surface-raised)' }}
       >
@@ -1153,6 +1175,7 @@ export default function RiskDashboard() {
             <h3 className="text-[13px] font-medium" style={{ color: 'var(--foreground)' }}>
               BTC price & risk history
             </h3>
+            <ShareChartButton targetRef={riskChartRef} title="BTC price & risk history" filenamePrefix="btc-risk-chart" />
             <span className="ui-label hidden sm:inline">
               {CHART_MODES.find(m => m.id === chartMode)?.hint}
             </span>

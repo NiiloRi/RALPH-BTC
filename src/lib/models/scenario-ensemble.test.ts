@@ -16,14 +16,20 @@ function daily(start: string, n: number, fn: (i: number) => number): Point[] {
  * then stays flat long enough for the episode to complete and a full 3-year
  * forward trajectory to exist.
  */
-function syntheticWorld() {
+function syntheticWorld(withActiveEpisode = false) {
   const n = 5200;
   const crashStart = 1400; // ~2016 in day-index terms
   const crashEnd = 1700;
+  const endCrashStart = n - 400;
   const btc = daily('2012-01-02', n, i => {
     if (i < crashStart) return 1000 + i;
     if (i < crashEnd) return 2400 - (i - crashStart) * 5; // deep crash → ratio RSI spikes
-    return 900 + (i - crashEnd) * 2; // strong multi-year recovery
+    const recovered = 900 + (i - crashEnd) * 2; // strong multi-year recovery
+    if (withActiveEpisode && i >= endCrashStart) {
+      // unrecovered crash into the present → ACTIVE episode at the end
+      return Math.max(200, recovered - (i - endCrashStart) * 12);
+    }
+    return recovered;
   });
   const nas = daily('2012-01-02', n, i => 4000 + i).filter((_, i) => i % 7 === 0);
   return { btc, nas };
@@ -32,15 +38,36 @@ function syntheticWorld() {
 describe('buildScenarioEnsemble', () => {
   const { btc, nas } = syntheticWorld();
 
-  it('builds bands from completed episodes only, anchored at spot', () => {
+  it('builds bands from completed episodes; without an active episode, anchors at latest', () => {
     const e = buildScenarioEnsemble(btc, nas);
     expect(e).not.toBeNull();
     expect(e!.anchors.length).toBeGreaterThan(0);
     expect(e!.pathCount).toBe(e!.anchors.length * 6);
     expect(e!.bands).toHaveLength(DEFAULT_HORIZON_WEEKS + 1);
-    // w=0: every path equals spot → all percentiles identical
+    expect(e!.anchorType).toBe('latest');
+    // w=0: every path equals the anchor price → all percentiles identical
     const w0 = e!.bands[0];
     expect(w0.p10).toBeCloseTo(w0.p90, 6);
+    expect(w0.p10).toBeCloseTo(e!.anchorPrice, 6);
+    expect(w0.date).toBe(e!.anchorDate);
+  });
+
+  it('anchors at the ACTIVE episode start and keeps elapsed band dates on realized weeks', () => {
+    const { btc: btc2, nas: nas2 } = syntheticWorld(true);
+    const e = buildScenarioEnsemble(btc2, nas2)!;
+    expect(e.anchorType).toBe('active-episode');
+    // the anchor is in the past → bands must start BEFORE the last observation
+    const lastDate = btc2[btc2.length - 1].date;
+    expect(e.anchorDate < lastDate).toBe(true);
+    expect(e.bands[0].date).toBe(e.anchorDate);
+    expect(e.bands[0].p10).toBeCloseTo(e.anchorPrice, 6);
+    // a decent overlap exists: several band dates precede the last observation
+    const elapsed = e.bands.filter(b => b.date <= lastDate).length;
+    expect(elapsed).toBeGreaterThan(10);
+    // the FIXED anchor does not move when new data arrives
+    const shorter = buildScenarioEnsemble(btc2.slice(0, btc2.length - 60), nas2)!;
+    expect(shorter.anchorType).toBe('active-episode');
+    expect(shorter.anchorDate).toBe(e.anchorDate);
   });
 
   it('percentiles are ordered p10 <= p25 <= p75 <= p90 at every week', () => {

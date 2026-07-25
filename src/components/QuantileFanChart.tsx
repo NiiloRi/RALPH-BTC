@@ -19,7 +19,7 @@
  * not derived from our fit (our pre-2017 data has no intraday wicks).
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ComposedChart,
   Line,
@@ -31,6 +31,7 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
+import ShareChartButton from './ShareChartButton';
 import {
   fitQuantileFan,
   evaluateFan,
@@ -149,6 +150,7 @@ function FanTooltip({ active, payload, showWicks }: FanTooltipProps) {
 }
 
 export default function QuantileFanChart({ series, riskSeries }: QuantileFanChartProps) {
+  const shareRef = useRef<HTMLElement>(null);
   const [showWicks, setShowWicks] = useState(true);
   const [showRisk, setShowRisk] = useState(false);
   // Projection: extend the fan curves to the estimated next halving + 6 months
@@ -293,13 +295,14 @@ export default function QuantileFanChart({ series, riskSeries }: QuantileFanChar
   const posColor = cheap ? '#22c55e' : expensive ? '#dc2626' : 'var(--foreground)';
 
   return (
-    <section className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
+    <section ref={shareRef} className="rounded-2xl border px-4 sm:px-6 py-5" style={{ borderColor: 'var(--hairline)', background: 'var(--surface)' }}>
       {/* Header */}
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
         <h3 className="font-display text-2xl" style={{ color: 'var(--foreground)' }}>
           Asymmetric quantile regression fan
         </h3>
         <div className="flex items-center gap-3">
+          <ShareChartButton targetRef={shareRef} title="BTC Quantile fan" filenamePrefix="btc-fan" />
           {zoom && (
             <button
               onClick={() => setZoom(null)}

@@ -101,6 +101,9 @@ export interface ScenarioProp {
   rows: ScenarioRow[];
   anchors: string[];
   pathCount: number;
+  /** fixed anchor the bands replay from (active episode start, or latest) */
+  anchorDate: string;
+  anchorType: 'active-episode' | 'latest';
 }
 
 export interface FanYearRow {
@@ -666,9 +669,10 @@ export default function VerdictHero(props: VerdictHeroProps) {
           </div>
           <p className="text-[10px] mt-1" style={{ color: 'var(--faint)' }}>
             {scenario.pathCount} paths = BTC&rsquo;s 3y trajectory after each completed NAS100/BTC
-            episode ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80 and
-            replayed from spot. Replays of history that all resolved favorably — no failed-signal
-            distribution, not a prediction.
+            episode ({scenario.anchors.map(a => a.slice(0, 7)).join(', ')}) scaled ×0.33–0.80,
+            replayed from the FIXED anchor {scenario.anchorDate}
+            {scenario.anchorType === 'active-episode' ? ' (active episode start — bands stay put so realized price can be tracked against them)' : ' (latest close)'}.
+            Replays of history that all resolved favorably — no failed-signal distribution, not a prediction.
           </p>
         </div>
       )}
